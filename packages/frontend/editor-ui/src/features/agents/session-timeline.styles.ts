@@ -23,7 +23,7 @@ export function pillColors(
 		case 'idle':
 			return { backgroundColor: 'var(--color--yellow-200)', color: 'var(--color--yellow-950)' };
 		case 'compaction':
-			return { backgroundColor: 'var(--color--slate-300)', color: 'var(--color--slate-900)' };
+			return { backgroundColor: 'var(--color--gold-200)', color: 'var(--color--gold-900)' };
 		default:
 			return { backgroundColor: 'var(--color--neutral-200)', color: 'var(--color--neutral-950)' };
 	}

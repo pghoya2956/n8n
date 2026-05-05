@@ -34,9 +34,7 @@ export interface TimelineItem {
 	 */
 	nodeParameters?: Record<string, unknown>;
 	resumed?: boolean;
-	/** Number of observations rolled into the summary (only set for `kind: 'compaction'`). */
-	observationsCompacted?: number;
-	/** The new rolling summary the compactor produced (only set for `kind: 'compaction'`). */
+	/** The behavioural-patterns summary the compactor produced (only set for `kind: 'compaction'`). */
 	summary?: string;
 }
 

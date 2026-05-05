@@ -367,12 +367,6 @@ const workflowFormOutput = computed((): { formUrl: string; message: string } | n
 					</template>
 
 					<template v-else-if="item.kind === 'compaction'">
-						<dl :class="$style.infoRow">
-							<dt :class="$style.label">
-								{{ i18n.baseText('agentSessions.timeline.detail.compaction.compactedLabel') }}
-							</dt>
-							<dd :class="$style.value">{{ item.observationsCompacted ?? 0 }}</dd>
-						</dl>
 						<div v-if="item.summary" :class="$style.codeBlock">
 							<div :class="$style.codeBlockCopy">
 								<N8nTooltip

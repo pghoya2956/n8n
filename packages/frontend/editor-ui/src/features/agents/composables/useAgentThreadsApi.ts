@@ -27,9 +27,23 @@ export interface ThreadExecution {
 	metadata: Array<{ key: string; value: string }>;
 }
 
+/**
+ * Rolling-summary snapshot from observational memory. One row per
+ * compaction. `payload` is the full summary text the compactor produced;
+ * `seq` is the per-thread monotonic sequence on the observation table so
+ * the FE can preserve order independent of clock skew.
+ */
+export interface ThreadSummary {
+	id: string;
+	seq: number;
+	payload: string;
+	createdAt: string;
+}
+
 export interface ThreadDetail {
 	thread: ExecutionThread;
 	executions: ThreadExecution[];
+	summaries: ThreadSummary[];
 }
 
 export interface ThreadsPage {

@@ -14,6 +14,7 @@ import { useThreadTitle } from '@/features/agents/utils/thread-title';
 import type {
 	ExecutionThread,
 	ThreadExecution,
+	ThreadSummary,
 } from '@/features/agents/composables/useAgentThreadsApi';
 import SessionTimelineChart from '@/features/agents/components/SessionTimelineChart.vue';
 import SessionEventFilter from '@/features/agents/components/SessionEventFilter.vue';
@@ -21,6 +22,8 @@ import SessionTimelineTable from '@/features/agents/components/SessionTimelineTa
 import SessionDetailPanel from '@/features/agents/components/SessionDetailPanel.vue';
 import {
 	flattenExecutionsToTimelineItems,
+	summariesToTimelineItems,
+	mergeTimelineItems,
 	computeIdleRanges,
 	sessionBounds,
 	itemFilterKey,
@@ -52,6 +55,7 @@ const threadId = computed(() => route.params.threadId as string);
 
 const thread = ref<ExecutionThread | null>(null);
 const executions = ref<ThreadExecution[]>([]);
+const summaries = ref<ThreadSummary[]>([]);
 const loading = ref(true);
 const selectedIndex = ref<number | null>(null);
 const highlightedIndex = ref<number | null>(null);
@@ -59,7 +63,12 @@ const selectedFilters = ref<Set<string>>(new Set());
 const searchQuery = ref('');
 let loadThreadDetailRequestId = 0;
 
-const items = computed<TimelineItem[]>(() => flattenExecutionsToTimelineItems(executions.value));
+const items = computed<TimelineItem[]>(() =>
+	mergeTimelineItems(
+		flattenExecutionsToTimelineItems(executions.value),
+		summariesToTimelineItems(threadId.value, summaries.value),
+	),
+);
 const idleRanges = computed(() => computeIdleRanges(items.value));
 const bounds = computed(() => sessionBounds(items.value));
 
@@ -271,6 +280,7 @@ async function loadThreadDetail() {
 
 	thread.value = null;
 	executions.value = [];
+	summaries.value = [];
 	selectedFilters.value = new Set();
 	searchQuery.value = '';
 	selectTimelineItem(null);
@@ -287,6 +297,7 @@ async function loadThreadDetail() {
 		if (requestId !== loadThreadDetailRequestId) return;
 		thread.value = result.thread;
 		executions.value = result.executions;
+		summaries.value = result.summaries ?? [];
 	} catch (error) {
 		if (requestId !== loadThreadDetailRequestId) return;
 		toast.showError(error, i18n.baseText('agentSessions.showError.load'));

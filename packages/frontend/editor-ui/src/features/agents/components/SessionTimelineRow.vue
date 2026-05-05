@@ -50,9 +50,7 @@ const infoText = computed((): string => {
 		case 'suspension':
 			return i18n.baseText('agentSessions.timeline.waitingForUser');
 		case 'compaction':
-			return i18n.baseText('agentSessions.timeline.compactionRan', {
-				interpolate: { count: it.observationsCompacted ?? 0 },
-			});
+			return i18n.baseText('agentSessions.timeline.compactionRan');
 		default:
 			return '';
 	}

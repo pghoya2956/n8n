@@ -621,7 +621,6 @@ export class Agent implements BuiltAgent, AgentBuilder {
 		const telemetry = runtime.getConfiguredTelemetry();
 		const { scopeKind, scopeId } = resolveObservationalScope(obsConfig, {
 			threadId: opts.threadId,
-			...(opts.resourceId !== undefined && { resourceId: opts.resourceId }),
 		});
 		return {
 			memory: memory as BuiltMemory & BuiltObservationStore,

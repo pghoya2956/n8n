@@ -141,13 +141,6 @@ export class AgentExecutionService {
 		if (record.workingMemory) {
 			metadata.push({ key: 'workingMemory', value: record.workingMemory });
 		}
-		if (record.observations.length > 0) {
-			const total = record.observations.reduce((sum, batch) => sum + batch.count, 0);
-			metadata.push({ key: 'observationsWrittenCount', value: String(total) });
-		}
-		if (record.compactions.length > 0) {
-			metadata.push({ key: 'compactionsCount', value: String(record.compactions.length) });
-		}
 		if (params.source) {
 			metadata.push({ key: 'source', value: params.source });
 		}
@@ -307,13 +300,30 @@ export class AgentExecutionService {
 		const thread = await this.executionThreadRepository.findOneBy({ id: threadId });
 		if (!thread || !threadBelongsTo(thread, projectId, agentId)) return null;
 
-		const executions = await this.executionRepository.find({
-			where: { threadId },
-			order: { createdAt: 'ASC' },
-			relations: ['metadata'],
-		});
+		const [executions, summaryRows] = await Promise.all([
+			this.executionRepository.find({
+				where: { threadId },
+				order: { createdAt: 'ASC' },
+				relations: ['metadata'],
+			}),
+			this.n8nMemory.getObservations({
+				scopeKind: 'thread',
+				scopeId: threadId,
+				kindIs: 'summary',
+			}),
+		]);
 
-		return { thread, executions };
+		// Surface only the fields the FE needs to render the rolling-summary
+		// timeline items. The full row is intentionally narrowed to keep the
+		// payload small and avoid leaking schema details.
+		const summaries = summaryRows.map((row) => ({
+			id: row.id,
+			seq: row.seq,
+			payload: typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload),
+			createdAt: row.createdAt.toISOString(),
+		}));
+
+		return { thread, executions, summaries };
 	}
 
 	/**
