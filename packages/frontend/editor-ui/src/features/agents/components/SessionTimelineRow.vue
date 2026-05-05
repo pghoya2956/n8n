@@ -49,10 +49,6 @@ const infoText = computed((): string => {
 			return i18n.baseText('agentSessions.timeline.memoryUpdated');
 		case 'suspension':
 			return i18n.baseText('agentSessions.timeline.waitingForUser');
-		case 'observation':
-			return i18n.baseText('agentSessions.timeline.observationsRecorded', {
-				interpolate: { count: it.observationCount ?? 0 },
-			});
 		case 'compaction':
 			return i18n.baseText('agentSessions.timeline.compactionRan', {
 				interpolate: { count: it.observationsCompacted ?? 0 },
@@ -78,8 +74,6 @@ const label = computed((): string => {
 			return i18n.baseText('agentSessions.timeline.memory');
 		case 'suspension':
 			return i18n.baseText('agentSessions.timeline.suspended');
-		case 'observation':
-			return i18n.baseText('agentSessions.timeline.observation');
 		case 'compaction':
 			return i18n.baseText('agentSessions.timeline.compaction');
 		default:

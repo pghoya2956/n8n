@@ -10,27 +10,59 @@ import { Logger } from '@n8n/backend-common';
 import { Container } from '@n8n/di';
 import { generateText } from 'ai';
 
-const OBSERVER_PROMPT = `You are an observer watching a conversation between a user and an assistant.
-Read the recent message delta and the current rolling summary, then emit one
-JSON object per line for each NOTEWORTHY observation you make.
+const OBSERVER_PROMPT = `You watch a conversation between a user and an assistant and record only
+BEHAVIOURAL OBSERVATIONS — patterns in how the user engages, not what they say.
 
-What counts as noteworthy:
-  - Patterns or transitions (e.g. user shifted topic, frustration setting in)
-  - Recurring requests or rephrasings
-  - Behavioural arcs across multiple messages
-Skip: factual content the assistant already captured in working memory.
+A separate "working memory" already captures durable facts and current state
+(user facts, preferences, goals, decisions, open follow-ups, dietary needs,
+guest counts, etc.). Do NOT restate any of that. If your observation could
+sit in working memory, it does not belong here — skip it.
+
+What DOES belong here (only emit when truly present in this delta):
+  - Engagement shifts (user re-engaged after a pause; user disengaged; user
+    pushed back; topic-jumped; reset and resumed).
+  - Recurring patterns over multiple turns (user repeatedly asks for
+    directness; user keeps narrowing the same constraint; user seems fatigued).
+  - Friction signals (user rejected a framing; user corrected the assistant;
+    user signalled the assistant is asking too many questions).
+  - Meta-preferences the user expresses about HOW they want to interact (not
+    WHAT they want). Even these usually belong in working memory if durable —
+    only emit if the pattern emerged across several turns rather than a single
+    one-off statement.
+
+Hard NO list (these go in working memory, not here):
+  - Facts ("user has 8 guests", "dietary: 2 vegetarian, 1 GF").
+  - Decisions ("decided pasta night").
+  - Goals / current task / current state.
+  - Single-turn statements of fact or preference.
 
 Output format — JSON Lines, no markdown fences. Each line is one of:
-  {"kind": "observation", "text": "<one-sentence observation>"}
+  {"kind": "observation", "text": "<one-sentence behavioural observation>"}
   {"kind": "gap", "durationMs": <number>, "text": "<short note about the gap>"}
 
-Emit nothing if there's nothing noteworthy. Never write the rolling summary
-itself — that's the compactor's job.`;
+Emit nothing — output an empty response — if no behavioural pattern is
+present in this delta. Most turns produce zero observations. That is the
+expected case.`;
 
-const COMPACTOR_PROMPT = `You are a compactor. Read the previous rolling summary and a list of
-recent observations, then output a NEW rolling summary that incorporates
-the observations. Keep it concise — bullet-point style, drop superseded
-items, preserve durable patterns. Plain text, no markdown fences.`;
+const COMPACTOR_PROMPT = `You produce a rolling summary of BEHAVIOURAL PATTERNS that have emerged
+across this conversation — not the state of the conversation. State, facts,
+decisions, and open follow-ups live in a separate "working memory" and must
+NOT appear in your output.
+
+Read the previous rolling summary and the new observations, then output a
+new summary covering ONLY:
+  - Persistent engagement patterns (how the user works, not what they want).
+  - Recurring frictions or preferences about interaction style.
+  - Behavioural arcs that span multiple turns.
+
+Drop:
+  - Anything that looks like a fact, decision, goal, or current state.
+  - Restatements of context already obvious from the conversation.
+  - Patterns that occurred only once and aren't recurring.
+
+Bullet-point style, plain text, no markdown fences. Keep it short — three
+to six bullets is normal. If nothing durable has emerged yet, return an
+empty string.`;
 
 const SUMMARY_KIND = 'summary';
 
@@ -146,18 +178,26 @@ export function createObservationalMemoryFunctions(
 
 	const formatContext: FormatContextFn = (ctx) => {
 		const lines: string[] = [];
+		const hasContent = ctx.summary !== null || ctx.recentObservations.length > 0;
+		if (!hasContent) return '';
+
+		lines.push('## Observed behavioural patterns');
+		lines.push(
+			'Patterns about HOW the user engages across this thread. Durable facts, decisions, preferences, goals, and current state are tracked separately in working memory above — do not duplicate them here, and prefer working memory when the user shares new facts or makes decisions.',
+		);
+		if (ctx.isStale) {
+			lines.push('');
+			lines.push(
+				'[NOTE] These patterns are older than the configured staleness threshold — verify they still apply before relying on them.',
+			);
+		}
 		if (ctx.summary !== null) {
-			if (ctx.isStale) {
-				lines.push(
-					'[NOTE] The observational summary below is older than the configured staleness threshold — verify against current state before acting on it.',
-				);
-			}
-			lines.push('## Observational summary');
+			lines.push('');
 			lines.push(ctx.summary);
 		}
 		if (ctx.recentObservations.length > 0) {
 			lines.push('');
-			lines.push('## Recent observations');
+			lines.push('### Recent (uncompacted)');
 			for (const row of ctx.recentObservations) {
 				const text = typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload);
 				const prefix = row.kind === 'gap' ? '⏸ ' : '• ';

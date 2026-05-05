@@ -103,7 +103,6 @@ const COLOR_MAP: Record<EventKind, string> = {
 	workflow: 'var(--color--primary)',
 	'working-memory': 'var(--color--foreground--shade-1)',
 	suspension: 'var(--color--warning)',
-	observation: 'var(--color--slate-400)',
 	compaction: 'var(--color--slate-600)',
 };
 
@@ -119,7 +118,6 @@ const CHART_BLOCK_COLOR_MAP: Record<EventKind, string> = {
 	workflow: 'var(--color--orange-600)',
 	'working-memory': 'var(--color--mint-600)',
 	suspension: 'var(--color--yellow-600)',
-	observation: 'var(--color--slate-500)',
 	compaction: 'var(--color--slate-700)',
 };
 
@@ -220,13 +218,6 @@ interface RawSuspensionEvent {
 	timestamp: number;
 }
 
-interface RawObservationEvent {
-	type: 'observation';
-	timestamp: number;
-	count: number;
-	kinds: string[];
-}
-
 interface RawCompactionEvent {
 	type: 'compaction';
 	timestamp: number;
@@ -239,7 +230,6 @@ type RawEvent =
 	| RawTextEvent
 	| RawMemoryEvent
 	| RawSuspensionEvent
-	| RawObservationEvent
 	| RawCompactionEvent;
 
 function metaValue(exec: ThreadExecution, key: string): string | undefined {
@@ -323,14 +313,6 @@ export function flattenExecutionsToTimelineItems(executions: ThreadExecution[]):
 					toolName: event.toolName,
 					toolCallId: event.toolCallId,
 					timestamp: event.timestamp ?? 0,
-				});
-			} else if (event.type === 'observation') {
-				items.push({
-					kind: 'observation',
-					executionId: exec.id,
-					timestamp: event.timestamp ?? 0,
-					observationCount: event.count,
-					observationKinds: event.kinds,
 				});
 			} else if (event.type === 'compaction') {
 				items.push({

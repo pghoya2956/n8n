@@ -6,7 +6,6 @@ export type EventKind =
 	| 'workflow'
 	| 'working-memory'
 	| 'suspension'
-	| 'observation'
 	| 'compaction';
 
 export interface TimelineItem {
@@ -35,10 +34,6 @@ export interface TimelineItem {
 	 */
 	nodeParameters?: Record<string, unknown>;
 	resumed?: boolean;
-	/** Number of observations written in this batch (only set for `kind: 'observation'`). */
-	observationCount?: number;
-	/** Distinct observation kinds in this batch (only set for `kind: 'observation'`). */
-	observationKinds?: string[];
 	/** Number of observations rolled into the summary (only set for `kind: 'compaction'`). */
 	observationsCompacted?: number;
 	/** The new rolling summary the compactor produced (only set for `kind: 'compaction'`). */

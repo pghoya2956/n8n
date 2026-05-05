@@ -183,26 +183,28 @@ describe('createObservationalMemoryFunctions', () => {
 			).toBe('');
 		});
 
-		it('renders the summary section without the staleness caveat when not stale', () => {
+		it('renders the patterns section without the staleness caveat when not stale', () => {
 			const out = formatContext({
 				summary: 'rolling state',
 				summaryUpdatedAt: new Date(),
 				isStale: false,
 				recentObservations: [],
 			});
-			expect(out).toContain('## Observational summary');
+			expect(out).toContain('## Observed behavioural patterns');
+			expect(out).toContain('working memory');
 			expect(out).toContain('rolling state');
 			expect(out).not.toContain('[NOTE]');
 		});
 
-		it('prepends the staleness caveat when isStale=true', () => {
+		it('includes the staleness caveat when isStale=true', () => {
 			const out = formatContext({
 				summary: 'rolling state',
 				summaryUpdatedAt: new Date(0),
 				isStale: true,
 				recentObservations: [],
 			});
-			expect(out.startsWith('[NOTE]')).toBe(true);
+			expect(out).toContain('## Observed behavioural patterns');
+			expect(out).toContain('[NOTE]');
 			expect(out).toContain('rolling state');
 		});
 
@@ -216,7 +218,7 @@ describe('createObservationalMemoryFunctions', () => {
 					mock<Observation>({ kind: 'gap', payload: 'paused for a while' }),
 				],
 			});
-			expect(out).toContain('## Recent observations');
+			expect(out).toContain('### Recent (uncompacted)');
 			expect(out).toContain('• observed thing');
 			expect(out).toContain('⏸ paused for a while');
 		});
