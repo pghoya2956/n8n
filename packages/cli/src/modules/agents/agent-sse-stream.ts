@@ -111,14 +111,8 @@ function emitTextLikeChunk(
  * Returns `{ suspended: true }` when the chunk was `tool-call-suspended`.
  */
 /**
- * Working memory is implemented as an SDK tool, but it fires silently from
- * the user's perspective: the agent updates memory in the background and the
- * change surfaces through the system prompt on subsequent turns rather than
- * through an explicit chat-history entry. Tool-* chunks for the WM tool are
- * swallowed here so they never reach the FE — the chat shows the agent's
- * response, not the housekeeping. Errors still surface as a regular SSE
- * `error` event so the user knows something went wrong.
- *
+ * Working memory is implemented as an SDK tool, but n8n surfaces it as a
+ * distinct memory event in the chat UI rather than a regular tool step.
  * Returns `true` when the chunk was handled and should not flow through the
  * regular tool emission path.
  */
@@ -153,6 +147,8 @@ function handleWorkingMemoryChunk(
 		if (chunk.isError) {
 			const errMsg = chunk.output instanceof Error ? chunk.output.message : String(chunk.output);
 			send({ type: 'error', message: `Working memory update failed: ${errMsg}` });
+		} else {
+			send({ type: 'working-memory-update', toolName: chunk.toolName });
 		}
 		return true;
 	}
