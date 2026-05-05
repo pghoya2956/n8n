@@ -168,6 +168,11 @@ export interface AgentJsonConfig {
 			messageRange?: { before: number; after: number };
 			embedder?: string;
 		};
+		observationalMemory?: {
+			enabled: boolean;
+			compactionRowThreshold?: number;
+			stalenessThresholdMs?: number;
+		};
 	};
 	tools?: AgentJsonToolRef[];
 	skills?: AgentJsonSkillRef[];

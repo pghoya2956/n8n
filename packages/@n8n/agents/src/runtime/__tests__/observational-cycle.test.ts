@@ -372,6 +372,93 @@ describe('runObservationalCycle', () => {
 		expect(second).toEqual({ status: 'skipped', reason: 'no-delta' });
 	});
 
+	it('emits ObservationsWritten with count and unique kinds after observe', async () => {
+		const store = new InMemoryMemory();
+		await seedThread(store, 't-1', 2);
+		const bus = new AgentEventBus();
+		const events: AgentEventData[] = [];
+		bus.on(AgentEvent.ObservationsWritten, (e) => events.push(e));
+
+		const observe = jest
+			.fn()
+			.mockResolvedValue([
+				makeNewObs({ kind: 'observation' }),
+				makeNewObs({ kind: 'gap' }),
+				makeNewObs({ kind: 'observation' }),
+			]) as unknown as ObserveFn;
+
+		await runObservationalCycle({
+			memory: store,
+			scopeKind: 'thread',
+			scopeId: 't-1',
+			observe,
+			eventBus: bus,
+		});
+
+		expect(events).toHaveLength(1);
+		const ev = events[0] as Extract<AgentEventData, { type: AgentEvent.ObservationsWritten }>;
+		expect(ev.scopeKind).toBe('thread');
+		expect(ev.scopeId).toBe('t-1');
+		expect(ev.count).toBe(3);
+		expect(ev.kinds.sort()).toEqual(['gap', 'observation']);
+	});
+
+	it('does not emit ObservationsWritten when observe returns no rows', async () => {
+		const store = new InMemoryMemory();
+		await seedThread(store, 't-1', 2);
+		const bus = new AgentEventBus();
+		const events: AgentEventData[] = [];
+		bus.on(AgentEvent.ObservationsWritten, (e) => events.push(e));
+
+		const observe = jest.fn().mockResolvedValue([]) as unknown as ObserveFn;
+		await runObservationalCycle({
+			memory: store,
+			scopeKind: 'thread',
+			scopeId: 't-1',
+			observe,
+			eventBus: bus,
+		});
+
+		expect(events).toHaveLength(0);
+	});
+
+	it('emits CompactionRan with summary preview when threshold crosses', async () => {
+		const store = new InMemoryMemory();
+		await seedThread(store, 't-1', 1);
+		await store.appendObservations([
+			makeNewObs({ payload: 'pre-1' }),
+			makeNewObs({ payload: 'pre-2' }),
+		]);
+		const bus = new AgentEventBus();
+		const events: AgentEventData[] = [];
+		bus.on(AgentEvent.CompactionRan, (e) => events.push(e));
+
+		const observe = jest
+			.fn()
+			.mockResolvedValue([makeNewObs({ payload: 'fresh' })]) as unknown as ObserveFn;
+		const longSummary = 'x'.repeat(200);
+		const compact = jest.fn().mockResolvedValue({
+			summary: makeNewObs({ kind: 'summary', payload: longSummary }),
+		}) as unknown as CompactFn;
+
+		await runObservationalCycle({
+			memory: store,
+			scopeKind: 'thread',
+			scopeId: 't-1',
+			observe,
+			compact,
+			compactionMinObservations: 3,
+			eventBus: bus,
+		});
+
+		expect(events).toHaveLength(1);
+		const ev = events[0] as Extract<AgentEventData, { type: AgentEvent.CompactionRan }>;
+		expect(ev.scopeKind).toBe('thread');
+		expect(ev.scopeId).toBe('t-1');
+		expect(ev.observationsCompacted).toBe(3);
+		expect(ev.summary).toBe(longSummary);
+	});
+
 	describe('compactionIdleMs gate', () => {
 		beforeEach(() => {
 			jest.useFakeTimers({ doNotFake: ['nextTick'] });

@@ -1,4 +1,5 @@
 import type { AgentMessage, ContentToolCall } from '../sdk/message';
+import type { ScopeKind } from '../sdk/observation';
 
 export const enum AgentEvent {
 	AgentStart = 'agent_start',
@@ -7,6 +8,8 @@ export const enum AgentEvent {
 	TurnEnd = 'turn_end',
 	ToolExecutionStart = 'tool_execution_start',
 	ToolExecutionEnd = 'tool_execution_end',
+	ObservationsWritten = 'observations_written',
+	CompactionRan = 'compaction_ran',
 	Error = 'error',
 }
 
@@ -22,6 +25,20 @@ export type AgentEventData =
 			toolName: string;
 			result: unknown;
 			isError: boolean;
+	  }
+	| {
+			type: AgentEvent.ObservationsWritten;
+			scopeKind: ScopeKind;
+			scopeId: string;
+			count: number;
+			kinds: string[];
+	  }
+	| {
+			type: AgentEvent.CompactionRan;
+			scopeKind: ScopeKind;
+			scopeId: string;
+			observationsCompacted: number;
+			summary: string;
 	  }
 	| {
 			type: AgentEvent.Error;

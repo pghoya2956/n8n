@@ -939,6 +939,7 @@ export class AgentsService {
 		const { threadId, resourceId } = memory;
 
 		const recorder = new ExecutionRecorder(toolRegistry);
+		const recorderHandle = recorder.attach(agentInstance);
 
 		const resultStream = await agentInstance.stream(message, {
 			persistence: { threadId, resourceId },
@@ -968,6 +969,22 @@ export class AgentsService {
 		if (recorder.suspended) {
 			this.pendingUserMessages.set(agentId, message);
 		}
+
+		// Run reflect synchronously so the observer/compactor's events emit
+		// while the recorder is still attached. This adds ~1 LLM call of
+		// latency per turn when observational memory is enabled; otherwise
+		// `reflect` short-circuits to a no-op.
+		try {
+			await agentInstance.reflect({ threadId });
+		} catch (error) {
+			this.logger.warn('Observational memory reflect failed', {
+				agentId,
+				threadId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+
+		recorderHandle.dispose();
 
 		const messageRecord = recorder.getMessageRecord();
 		void this.agentExecutionService

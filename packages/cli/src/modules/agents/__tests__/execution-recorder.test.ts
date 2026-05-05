@@ -1,6 +1,35 @@
 import { ExecutionRecorder } from '../execution-recorder';
-import type { BuiltTool, StreamChunk } from '@n8n/agents';
+import {
+	AgentEvent,
+	type Agent,
+	type AgentEventData,
+	type AgentEventHandler,
+	type BuiltTool,
+	type StreamChunk,
+} from '@n8n/agents';
 import { buildToolRegistry } from '../tool-registry';
+
+interface AgentStub {
+	on: jest.Mock<void, [AgentEvent, AgentEventHandler]>;
+	off: jest.Mock<void, [AgentEvent, AgentEventHandler]>;
+	emit: (data: AgentEventData) => void;
+}
+
+function makeAgentStub(): AgentStub {
+	const handlers = new Map<AgentEvent, Set<AgentEventHandler>>();
+	const on = jest.fn((event: AgentEvent, h: AgentEventHandler) => {
+		const set = handlers.get(event) ?? new Set();
+		set.add(h);
+		handlers.set(event, set);
+	});
+	const off = jest.fn((event: AgentEvent, h: AgentEventHandler) => {
+		handlers.get(event)?.delete(h);
+	});
+	const emit = (data: AgentEventData) => {
+		for (const h of handlers.get(data.type) ?? new Set()) h(data);
+	};
+	return { on, off, emit };
+}
 
 function makeToolCallChunk(toolName: string, input: unknown, toolCallId = 'tc1'): StreamChunk {
 	return { type: 'tool-call', toolCallId, toolName, input } satisfies StreamChunk;
@@ -470,5 +499,99 @@ describe('ExecutionRecorder — workflow-tool timeline tags', () => {
 		const tc = rec.getMessageRecord().timeline.find((e) => e.type === 'tool-call')!;
 		expect(tc.workflowExecutionId).toBeUndefined();
 		expect(tc.success).toBe(false);
+	});
+
+	describe('attach() — observational memory events', () => {
+		it('subscribes to ObservationsWritten and CompactionRan on attach, unsubscribes on dispose', () => {
+			const recorder = new ExecutionRecorder();
+			const agent = makeAgentStub();
+
+			const handle = recorder.attach(agent as unknown as Agent);
+
+			expect(agent.on).toHaveBeenCalledWith(AgentEvent.ObservationsWritten, expect.any(Function));
+			expect(agent.on).toHaveBeenCalledWith(AgentEvent.CompactionRan, expect.any(Function));
+			expect(agent.off).not.toHaveBeenCalled();
+
+			handle.dispose();
+
+			expect(agent.off).toHaveBeenCalledWith(AgentEvent.ObservationsWritten, expect.any(Function));
+			expect(agent.off).toHaveBeenCalledWith(AgentEvent.CompactionRan, expect.any(Function));
+		});
+
+		it('records ObservationsWritten events into observations[] and the timeline', () => {
+			const recorder = new ExecutionRecorder();
+			const agent = makeAgentStub();
+			recorder.attach(agent as unknown as Agent);
+
+			agent.emit({
+				type: AgentEvent.ObservationsWritten,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				count: 2,
+				kinds: ['observation', 'gap'],
+			});
+			recorder.record({ type: 'finish', finishReason: 'stop' } as StreamChunk);
+
+			const record = recorder.getMessageRecord();
+			expect(record.observations).toEqual([{ count: 2, kinds: ['observation', 'gap'] }]);
+			const evt = record.timeline.find((e) => e.type === 'observation');
+			expect(evt).toBeDefined();
+			if (evt && evt.type === 'observation') {
+				expect(evt.count).toBe(2);
+				expect(evt.kinds).toEqual(['observation', 'gap']);
+			}
+		});
+
+		it('records CompactionRan events into compactions[] and the timeline', () => {
+			const recorder = new ExecutionRecorder();
+			const agent = makeAgentStub();
+			recorder.attach(agent as unknown as Agent);
+
+			agent.emit({
+				type: AgentEvent.CompactionRan,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				observationsCompacted: 7,
+				summary: 'rolled-up summary text',
+			});
+			recorder.record({ type: 'finish', finishReason: 'stop' } as StreamChunk);
+
+			const record = recorder.getMessageRecord();
+			expect(record.compactions).toEqual([
+				{ observationsCompacted: 7, summary: 'rolled-up summary text' },
+			]);
+			const evt = record.timeline.find((e) => e.type === 'compaction');
+			expect(evt).toBeDefined();
+			if (evt && evt.type === 'compaction') {
+				expect(evt.observationsCompacted).toBe(7);
+				expect(evt.summary).toBe('rolled-up summary text');
+			}
+		});
+
+		it('stops recording events after dispose', () => {
+			const recorder = new ExecutionRecorder();
+			const agent = makeAgentStub();
+			const handle = recorder.attach(agent as unknown as Agent);
+			handle.dispose();
+
+			agent.emit({
+				type: AgentEvent.ObservationsWritten,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				count: 1,
+				kinds: ['observation'],
+			});
+			recorder.record({ type: 'finish', finishReason: 'stop' } as StreamChunk);
+
+			expect(recorder.getMessageRecord().observations).toEqual([]);
+		});
+
+		it('returns empty observations[] and compactions[] when nothing fired', () => {
+			const recorder = new ExecutionRecorder();
+			recorder.record({ type: 'finish', finishReason: 'stop' } as StreamChunk);
+			const record = recorder.getMessageRecord();
+			expect(record.observations).toEqual([]);
+			expect(record.compactions).toEqual([]);
+		});
 	});
 });

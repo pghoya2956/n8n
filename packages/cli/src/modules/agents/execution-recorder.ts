@@ -1,4 +1,11 @@
-import { UPDATE_WORKING_MEMORY_TOOL_NAME, type StreamChunk } from '@n8n/agents';
+import {
+	AgentEvent,
+	UPDATE_WORKING_MEMORY_TOOL_NAME,
+	type Agent,
+	type AgentEventData,
+	type AgentEventHandler,
+	type StreamChunk,
+} from '@n8n/agents';
 import { extractFromAICalls, isFromAIOnlyExpression } from 'n8n-workflow';
 
 import type { ToolRegistry } from './tool-registry';
@@ -121,7 +128,24 @@ export type TimelineEvent =
 			nodeParameters?: Record<string, unknown>;
 	  }
 	| { type: 'working-memory'; content: string; timestamp: number }
-	| { type: 'suspension'; toolName: string; toolCallId: string; timestamp: number };
+	| { type: 'suspension'; toolName: string; toolCallId: string; timestamp: number }
+	| { type: 'observation'; timestamp: number; count: number; kinds: string[] }
+	| {
+			type: 'compaction';
+			timestamp: number;
+			observationsCompacted: number;
+			summary: string;
+	  };
+
+export interface RecordedObservationsBatch {
+	count: number;
+	kinds: string[];
+}
+
+export interface RecordedCompaction {
+	observationsCompacted: number;
+	summary: string;
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
 	return typeof v === 'object' && v !== null;
@@ -143,6 +167,8 @@ export interface MessageRecord {
 	duration: number;
 	error: string | null;
 	workingMemory: string | null;
+	observations: RecordedObservationsBatch[];
+	compactions: RecordedCompaction[];
 }
 
 export class ExecutionRecorder {
@@ -178,7 +204,52 @@ export class ExecutionRecorder {
 
 	private workingMemory: string | null = null;
 
+	private observations: RecordedObservationsBatch[] = [];
+
+	private compactions: RecordedCompaction[] = [];
+
 	private readonly startTime = Date.now();
+
+	/**
+	 * Subscribe to the agent's observational-memory events for the lifetime
+	 * of this turn. Returns a disposer that detaches the listeners; the
+	 * caller MUST invoke it (typically in `finally`) so subscriptions don't
+	 * leak across turns on a long-lived agent instance.
+	 */
+	attach(agent: Agent): { dispose: () => void } {
+		const onEvent: AgentEventHandler = (data: AgentEventData) => {
+			if (data.type === AgentEvent.ObservationsWritten) {
+				this.observations.push({ count: data.count, kinds: [...data.kinds] });
+				this.timeline.push({
+					type: 'observation',
+					timestamp: Date.now(),
+					count: data.count,
+					kinds: [...data.kinds],
+				});
+				return;
+			}
+			if (data.type === AgentEvent.CompactionRan) {
+				this.compactions.push({
+					observationsCompacted: data.observationsCompacted,
+					summary: data.summary,
+				});
+				this.timeline.push({
+					type: 'compaction',
+					timestamp: Date.now(),
+					observationsCompacted: data.observationsCompacted,
+					summary: data.summary,
+				});
+			}
+		};
+		agent.on(AgentEvent.ObservationsWritten, onEvent);
+		agent.on(AgentEvent.CompactionRan, onEvent);
+		return {
+			dispose: () => {
+				agent.off(AgentEvent.ObservationsWritten, onEvent);
+				agent.off(AgentEvent.CompactionRan, onEvent);
+			},
+		};
+	}
 
 	/** Feed a stream chunk into the recorder. */
 	record(chunk: StreamChunk): void {
@@ -259,6 +330,8 @@ export class ExecutionRecorder {
 			duration: Date.now() - this.startTime,
 			error: this.error,
 			workingMemory: this.workingMemory,
+			observations: this.observations,
+			compactions: this.compactions,
 		};
 	}
 

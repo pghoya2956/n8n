@@ -25,6 +25,7 @@ import type {
 } from './agent-json-config';
 import { mapCredentialForProvider } from './credential-field-mapping';
 import { resolveProviderToolName } from './provider-tool-aliases';
+import { createObservationalMemoryFunctions } from '../integrations/observational-memory';
 
 export type ToolResolver = (
 	toolSchema: AgentJsonToolConfig,
@@ -86,19 +87,8 @@ export async function buildFromJson(
 ): Promise<Agent> {
 	const agent = new Agent(config.name);
 
-	// Derive the provider prefix for credential field remapping.
-	const slashIdx = config.model.indexOf('/');
-	const providerPrefix = slashIdx !== -1 ? config.model.slice(0, slashIdx) : '';
-
-	// Resolve credentials upfront and embed them directly in the model config
-	// object so createModel() receives the full set of fields it needs.
-	if (config.credential) {
-		const raw = await options.credentialProvider.resolve(config.credential);
-		const mapped = mapCredentialForProvider(providerPrefix, raw);
-		agent.model({ id: config.model, ...mapped } as ModelConfig);
-	} else {
-		agent.model(config.model);
-	}
+	const resolvedModelConfig = await resolveModelConfig(config, options.credentialProvider);
+	agent.model(resolvedModelConfig);
 
 	const configuredSkills = getConfiguredSkills(config.skills ?? [], options.skills ?? {});
 	agent.instructions(withSkillCatalog(config.instructions, configuredSkills));
@@ -126,7 +116,7 @@ export async function buildFromJson(
 
 	// Memory
 	if (config.memory?.enabled) {
-		await applyMemoryFromConfig(agent, config.memory, options.memoryFactory);
+		await applyMemoryFromConfig(agent, config.memory, options.memoryFactory, resolvedModelConfig);
 	}
 
 	// Config options
@@ -292,10 +282,14 @@ async function resolveToolRef(
 	}
 }
 
+const DEFAULT_OBSERVATIONAL_COMPACTION_ROW_THRESHOLD = 10;
+const DEFAULT_OBSERVATIONAL_STALENESS_MS = 24 * 60 * 60 * 1000;
+
 async function applyMemoryFromConfig(
 	agent: AgentBuilder,
 	memoryConfig: AgentJsonMemoryConfig,
 	memoryFactory: MemoryFactory,
+	resolvedModelConfig: ModelConfig,
 ) {
 	const memory = new Memory();
 
@@ -314,7 +308,36 @@ async function applyMemoryFromConfig(
 		memory.semanticRecall(memoryConfig.semanticRecall);
 	}
 
+	if (memoryConfig.observationalMemory?.enabled) {
+		const { observe, compact, formatContext } = createObservationalMemoryFunctions({
+			modelConfig: resolvedModelConfig,
+		});
+		memory.observationalMemory({
+			observe,
+			compact,
+			formatContext,
+			compactionRowThreshold:
+				memoryConfig.observationalMemory.compactionRowThreshold ??
+				DEFAULT_OBSERVATIONAL_COMPACTION_ROW_THRESHOLD,
+			stalenessThresholdMs:
+				memoryConfig.observationalMemory.stalenessThresholdMs ?? DEFAULT_OBSERVATIONAL_STALENESS_MS,
+		});
+	}
+
 	memory.titleGeneration({ sync: true });
 
 	agent.memory(memory);
+}
+
+async function resolveModelConfig(
+	config: AgentJsonConfig,
+	credentialProvider: CredentialProvider,
+): Promise<ModelConfig> {
+	if (!config.credential) return config.model;
+
+	const slashIdx = config.model.indexOf('/');
+	const providerPrefix = slashIdx !== -1 ? config.model.slice(0, slashIdx) : '';
+	const raw = await credentialProvider.resolve(config.credential);
+	const mapped = mapCredentialForProvider(providerPrefix, raw);
+	return { id: config.model, ...mapped } as ModelConfig;
 }

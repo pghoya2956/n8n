@@ -98,7 +98,7 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 
 	async getMessages(
 		threadId: string,
-		opts?: { limit?: number; before?: Date; resourceId?: string },
+		opts?: { limit?: number; before?: Date; resourceId?: string; sinceSeq?: number },
 	): Promise<AgentDbMessage[]> {
 		// `resourceId` is the per-user scope for any thread that carries messages
 		// for more than one resource. Use an explicit `!== undefined` check — a
@@ -108,6 +108,7 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 			threadId,
 			...(opts?.before && { createdAt: LessThan(opts.before) }),
 			...(opts?.resourceId !== undefined && { resourceId: opts.resourceId }),
+			...(opts?.sinceSeq !== undefined && { seq: MoreThan(opts.sinceSeq) }),
 		};
 
 		const entities = await this.messageRepository.find({
@@ -120,8 +121,15 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 		}
 
 		return entities.map((e) => {
-			const msg = e.content as AgentMessage & { id?: string };
+			const msg = e.content as AgentMessage & { id?: string; seq?: number };
 			msg.id = e.id;
+			// `bigint` columns come back as string in Postgres and number in SQLite;
+			// normalise. Null is possible for legacy rows that pre-date the seq
+			// column and weren't backfilled (shouldn't happen post-migration, but
+			// defensive).
+			if (e.seq !== null && e.seq !== undefined) {
+				msg.seq = Number(e.seq);
+			}
 			return msg as AgentDbMessage;
 		});
 	}
@@ -133,6 +141,18 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 	}): Promise<void> {
 		if (args.messages.length === 0) return;
 
+		// Allocate per-thread seq values. Existing messages may already have a
+		// seq from the migration backfill; only assign new values to messages
+		// that don't.
+		const lastForThread = await this.messageRepository.findOne({
+			where: { threadId: args.threadId },
+			order: { seq: 'DESC' },
+		});
+		let nextSeq =
+			lastForThread?.seq !== null && lastForThread?.seq !== undefined
+				? Number(lastForThread.seq) + 1
+				: 1;
+
 		// Upsert by id — bulk INSERT … ON CONFLICT (id) DO UPDATE avoids the
 		// per-row SELECT that save() performs. createdAt is passed explicitly so
 		// the column is preserved on conflict; updatedAt is set manually because
@@ -141,12 +161,16 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 		const entities = args.messages.map((dbMsg) => {
 			const role = 'role' in dbMsg ? (dbMsg.role as string) : 'custom';
 			const type = 'type' in dbMsg ? (dbMsg.type as string) : null;
+			// Re-use an inbound seq when present (re-saves preserve it); otherwise
+			// allocate the next per-thread value.
+			const seq = 'seq' in dbMsg && typeof dbMsg.seq === 'number' ? dbMsg.seq : nextSeq++;
 			return {
 				id: dbMsg.id,
 				threadId: args.threadId,
 				resourceId: args.resourceId,
 				role,
 				type: type ?? null,
+				seq,
 				content: dbMsg as unknown as Record<string, unknown>,
 				createdAt: dbMsg.createdAt,
 				updatedAt: now,

@@ -90,3 +90,68 @@ describe('isNodeToolsEnabled', () => {
 		expect(isNodeToolsEnabled({ nodeTools: { enabled: true } })).toBe(true);
 	});
 });
+
+describe('AgentJsonConfigSchema — memory.observationalMemory', () => {
+	const memoryBase = { enabled: true, storage: 'n8n' as const };
+
+	it('accepts a memory config without observationalMemory', () => {
+		const parsed = AgentJsonConfigSchema.safeParse({ ...baseConfig, memory: memoryBase });
+		expect(parsed.success).toBe(true);
+	});
+
+	it('accepts observationalMemory: { enabled: true } alone', () => {
+		const parsed = AgentJsonConfigSchema.safeParse({
+			...baseConfig,
+			memory: { ...memoryBase, observationalMemory: { enabled: true } },
+		});
+		expect(parsed.success).toBe(true);
+	});
+
+	it('accepts observationalMemory with thresholds set', () => {
+		const parsed = AgentJsonConfigSchema.safeParse({
+			...baseConfig,
+			memory: {
+				...memoryBase,
+				observationalMemory: {
+					enabled: true,
+					compactionRowThreshold: 5,
+					stalenessThresholdMs: 60_000,
+				},
+			},
+		});
+		expect(parsed.success).toBe(true);
+	});
+
+	it('rejects negative compactionRowThreshold', () => {
+		const parsed = AgentJsonConfigSchema.safeParse({
+			...baseConfig,
+			memory: {
+				...memoryBase,
+				observationalMemory: { enabled: true, compactionRowThreshold: -1 },
+			},
+		});
+		expect(parsed.success).toBe(false);
+	});
+
+	it('rejects negative stalenessThresholdMs', () => {
+		const parsed = AgentJsonConfigSchema.safeParse({
+			...baseConfig,
+			memory: {
+				...memoryBase,
+				observationalMemory: { enabled: true, stalenessThresholdMs: -1 },
+			},
+		});
+		expect(parsed.success).toBe(false);
+	});
+
+	it('rejects observationalMemory without enabled', () => {
+		const parsed = AgentJsonConfigSchema.safeParse({
+			...baseConfig,
+			memory: {
+				...memoryBase,
+				observationalMemory: { compactionRowThreshold: 5 },
+			},
+		});
+		expect(parsed.success).toBe(false);
+	});
+});

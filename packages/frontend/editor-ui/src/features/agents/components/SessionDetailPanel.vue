@@ -135,6 +135,10 @@ const headerTitle = computed((): string => {
 	if (item.kind === 'working-memory') return i18n.baseText('agentSessions.timeline.memory');
 	if (item.kind === 'user') return i18n.baseText('agentSessions.timeline.user');
 	if (item.kind === 'agent') return i18n.baseText('agentSessions.timeline.agent');
+	if (item.kind === 'observation')
+		return i18n.baseText('agentSessions.timeline.detail.observation.title');
+	if (item.kind === 'compaction')
+		return i18n.baseText('agentSessions.timeline.detail.compaction.title');
 	return i18n.baseText('agentSessions.timeline.suspended');
 });
 
@@ -147,6 +151,8 @@ const headerIcon = computed((): IconName => {
 	if (item.kind === 'working-memory') return 'brain';
 	if (item.kind === 'user') return 'user';
 	if (item.kind === 'agent') return 'bot';
+	if (item.kind === 'observation') return 'eye';
+	if (item.kind === 'compaction') return 'layers';
 	return 'clock';
 });
 
@@ -362,6 +368,45 @@ const workflowFormOutput = computed((): { formUrl: string; message: string } | n
 					<template v-else-if="item.kind === 'user' || item.kind === 'agent'">
 						<VueMarkdown :source="item.content ?? ''" :class="$style.markdown" />
 					</template>
+
+					<template v-else-if="item.kind === 'observation'">
+						<dl :class="$style.infoRow">
+							<dt :class="$style.label">
+								{{ i18n.baseText('agentSessions.timeline.detail.observation.countLabel') }}
+							</dt>
+							<dd :class="$style.value">{{ item.observationCount ?? 0 }}</dd>
+						</dl>
+						<dl
+							v-if="item.observationKinds && item.observationKinds.length > 0"
+							:class="$style.infoRow"
+						>
+							<dt :class="$style.label">
+								{{ i18n.baseText('agentSessions.timeline.detail.observation.kindsLabel') }}
+							</dt>
+							<dd :class="$style.value">{{ item.observationKinds.join(', ') }}</dd>
+						</dl>
+						<p :class="$style.about">
+							{{ i18n.baseText('agentSessions.timeline.detail.observation.about') }}
+						</p>
+					</template>
+
+					<template v-else-if="item.kind === 'compaction'">
+						<dl :class="$style.infoRow">
+							<dt :class="$style.label">
+								{{ i18n.baseText('agentSessions.timeline.detail.compaction.compactedLabel') }}
+							</dt>
+							<dd :class="$style.value">{{ item.observationsCompacted ?? 0 }}</dd>
+						</dl>
+						<dl v-if="item.summary" :class="$style.previewRow">
+							<dt :class="$style.label">
+								{{ i18n.baseText('agentSessions.timeline.detail.compaction.summaryLabel') }}
+							</dt>
+							<dd :class="$style.preview">{{ item.summary }}</dd>
+						</dl>
+						<p :class="$style.about">
+							{{ i18n.baseText('agentSessions.timeline.detail.compaction.about') }}
+						</p>
+					</template>
 				</div>
 			</div>
 		</template>
@@ -447,6 +492,30 @@ const workflowFormOutput = computed((): { formUrl: string; message: string } | n
 	font-size: var(--font-size--2xs);
 	color: var(--color--text);
 	font-variant-numeric: tabular-nums;
+}
+
+.previewRow {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing--4xs);
+	margin-top: var(--spacing--2xs);
+}
+
+.preview {
+	font-size: var(--font-size--2xs);
+	color: var(--color--text);
+	background-color: var(--background--shade-1);
+	padding: var(--spacing--2xs) var(--spacing--xs);
+	border-radius: var(--radius--3xs);
+	white-space: pre-wrap;
+	margin: 0;
+}
+
+.about {
+	font-size: var(--font-size--2xs);
+	color: var(--color--text--tint-1);
+	margin-top: var(--spacing--xs);
+	line-height: var(--line-height--sm);
 }
 
 .executionButton {

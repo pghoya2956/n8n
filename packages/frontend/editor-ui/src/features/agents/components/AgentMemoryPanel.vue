@@ -56,6 +56,16 @@ function onMemoryToggle(enabled: boolean) {
 		onDisableMemory();
 	}
 }
+
+function onObservationalMemoryToggle(enabled: boolean) {
+	if (!memory.value) return;
+	patchMemory({
+		observationalMemory: {
+			...(memory.value.observationalMemory ?? {}),
+			enabled,
+		},
+	});
+}
 </script>
 
 <template>
@@ -94,6 +104,22 @@ function onMemoryToggle(enabled: boolean) {
 					/>
 				</N8nSelect>
 			</div>
+
+			<div :class="$style.row">
+				<div :class="$style.labelGroup">
+					<N8nText size="small" :bold="true">{{
+						i18n.baseText('agents.builder.memory.observational.label')
+					}}</N8nText>
+					<N8nText size="xsmall" color="text-light">{{
+						i18n.baseText('agents.builder.memory.observational.hint')
+					}}</N8nText>
+				</div>
+				<N8nSwitch
+					:model-value="memory.observationalMemory?.enabled === true"
+					data-testid="agent-observational-memory-toggle"
+					@update:model-value="onObservationalMemoryToggle"
+				/>
+			</div>
 		</template>
 	</div>
 </template>
@@ -125,7 +151,16 @@ function onMemoryToggle(enabled: boolean) {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
+	gap: var(--spacing--sm);
 	min-height: var(--spacing--xl);
+}
+
+.labelGroup {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing--5xs);
+	flex: 1;
+	min-width: 0;
 }
 
 .inlineInput {

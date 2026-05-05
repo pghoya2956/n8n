@@ -141,6 +141,13 @@ export class AgentExecutionService {
 		if (record.workingMemory) {
 			metadata.push({ key: 'workingMemory', value: record.workingMemory });
 		}
+		if (record.observations.length > 0) {
+			const total = record.observations.reduce((sum, batch) => sum + batch.count, 0);
+			metadata.push({ key: 'observationsWrittenCount', value: String(total) });
+		}
+		if (record.compactions.length > 0) {
+			metadata.push({ key: 'compactionsCount', value: String(record.compactions.length) });
+		}
 		if (params.source) {
 			metadata.push({ key: 'source', value: params.source });
 		}
