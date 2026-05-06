@@ -101,8 +101,8 @@ const observe: ObserveFn = async (ctx) => {
 			const parsed = JSON.parse(trimmed) as { kind?: string; text?: string; durationMs?: number };
 			if (!parsed.kind || !parsed.text) continue;
 			rows.push({
-				scopeKind: 'thread',
-				scopeId: ctx.cursor?.scopeId ?? '',
+				scopeKind: ctx.scopeKind,
+				scopeId: ctx.scopeId,
 				kind: parsed.kind === 'gap' ? 'gap' : 'observation',
 				payload: parsed.text,
 				durationMs: typeof parsed.durationMs === 'number' ? parsed.durationMs : null,
@@ -197,7 +197,7 @@ const memory = new Memory()
 	.observationalMemory({
 		observe,
 		compact,
-		compactionRowThreshold: 5,
+		compactionMinObservations: 5,
 		stalenessThresholdMs: ONE_DAY_MS,
 		formatContext,
 	});

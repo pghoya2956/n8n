@@ -111,8 +111,8 @@ const observe: ObserveFn = async (ctx) => {
 			const parsed = JSON.parse(trimmed) as { kind?: string; text?: string; durationMs?: number };
 			if (!parsed.kind || !parsed.text) continue;
 			rows.push({
-				scopeKind: 'thread',
-				scopeId: ctx.cursor?.scopeId ?? '',
+				scopeKind: ctx.scopeKind,
+				scopeId: ctx.scopeId,
 				kind: parsed.kind === 'gap' ? 'gap' : 'observation',
 				payload: parsed.text,
 				durationMs: typeof parsed.durationMs === 'number' ? parsed.durationMs : null,
@@ -209,7 +209,7 @@ const memory = new Memory().storage(sqlite).observationalMemory({
 	observe,
 	compact,
 	// Low threshold so you actually see the compactor fire in a 5-turn run.
-	compactionRowThreshold: 4,
+	compactionMinObservations: 4,
 	stalenessThresholdMs: 24 * 60 * 60 * 1000,
 	formatContext,
 });

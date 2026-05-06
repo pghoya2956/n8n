@@ -182,7 +182,7 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe,
 			compact,
-			compactionRowThreshold: 5,
+			compactionMinObservations: 5,
 		});
 
 		expect(result).toEqual({ status: 'ran', observationsWritten: 1, compacted: false });
@@ -212,7 +212,7 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe,
 			compact,
-			compactionRowThreshold: 3,
+			compactionMinObservations: 3,
 		});
 
 		if (result.status !== 'ran') throw new Error('expected status=ran');
@@ -255,7 +255,7 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe,
 			compact,
-			compactionRowThreshold: 3,
+			compactionMinObservations: 3,
 		});
 
 		// Reset thread for a second cycle: append more messages + observations.
@@ -276,7 +276,7 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe,
 			compact,
-			compactionRowThreshold: 3,
+			compactionMinObservations: 3,
 		});
 
 		// Compactor was given the previous summary as input on the second run.
@@ -309,7 +309,7 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe,
 			compact,
-			compactionRowThreshold: 1,
+			compactionMinObservations: 1,
 			eventBus: bus,
 		});
 
@@ -346,7 +346,7 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe: observe as unknown as ObserveFn,
 			compact: compact as unknown as CompactFn,
-			compactionRowThreshold: 1,
+			compactionMinObservations: 1,
 			telemetry,
 		});
 
@@ -370,5 +370,249 @@ describe('runObservationalCycle', () => {
 		});
 		// Cursor advanced after first run, so second run sees no delta.
 		expect(second).toEqual({ status: 'skipped', reason: 'no-delta' });
+	});
+
+	describe('compactionIdleMs gate', () => {
+		beforeEach(() => {
+			jest.useFakeTimers({ doNotFake: ['nextTick'] });
+		});
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
+		it('first compaction fires regardless of idle window (no prior summaryUpdatedAt)', async () => {
+			jest.setSystemTime(new Date('2026-05-05T00:00:00Z'));
+			const store = new InMemoryMemory();
+			await seedThread(store, 't-1', 1);
+			await store.appendObservations([makeNewObs(), makeNewObs()]);
+
+			const observe = jest.fn().mockResolvedValue([makeNewObs()]) as unknown as ObserveFn;
+			const compact = jest.fn().mockResolvedValue({
+				summary: makeNewObs({ kind: 'summary', payload: 'first summary' }),
+			}) as unknown as CompactFn;
+
+			const result = await runObservationalCycle({
+				memory: store,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				observe,
+				compact,
+				compactionMinObservations: 3,
+				compactionIdleMs: 5 * 60 * 1000,
+			});
+
+			if (result.status !== 'ran') throw new Error('expected status=ran');
+			expect(result.compacted).toBe(true);
+			expect(compact).toHaveBeenCalledTimes(1);
+		});
+
+		it('skips a second compaction within the idle window', async () => {
+			jest.setSystemTime(new Date('2026-05-05T00:00:00Z'));
+			const store = new InMemoryMemory();
+			await seedThread(store, 't-1', 1);
+			await store.appendObservations([makeNewObs(), makeNewObs()]);
+
+			const observe = jest.fn().mockResolvedValue([makeNewObs()]) as unknown as ObserveFn;
+			const compact = jest.fn().mockResolvedValue({
+				summary: makeNewObs({ kind: 'summary', payload: 'summary' }),
+			}) as unknown as CompactFn;
+
+			// First cycle: fires.
+			await runObservationalCycle({
+				memory: store,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				observe,
+				compact,
+				compactionMinObservations: 3,
+				compactionIdleMs: 5 * 60 * 1000,
+			});
+			expect(compact).toHaveBeenCalledTimes(1);
+
+			// Advance only 1 minute and queue more observations.
+			jest.advanceTimersByTime(60 * 1000);
+			await store.saveMessages({
+				threadId: 't-1',
+				resourceId: 'u-1',
+				messages: [makeMsg('user', 'next-1'), makeMsg('assistant', 'next-2')],
+			});
+			await store.appendObservations([
+				makeNewObs({ payload: 'b1', createdAt: new Date() }),
+				makeNewObs({ payload: 'b2', createdAt: new Date() }),
+				makeNewObs({ payload: 'b3', createdAt: new Date() }),
+			]);
+
+			// Second cycle within window: skipped.
+			const result = await runObservationalCycle({
+				memory: store,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				observe,
+				compact,
+				compactionMinObservations: 3,
+				compactionIdleMs: 5 * 60 * 1000,
+			});
+
+			if (result.status !== 'ran') throw new Error('expected status=ran');
+			expect(result.compacted).toBe(false);
+			expect(compact).toHaveBeenCalledTimes(1);
+		});
+
+		it('burst override fires within the idle window when queue >= burst threshold', async () => {
+			jest.setSystemTime(new Date('2026-05-05T00:00:00Z'));
+			const store = new InMemoryMemory();
+			await seedThread(store, 't-1', 1);
+			await store.appendObservations([makeNewObs(), makeNewObs()]);
+
+			const observe = jest.fn().mockResolvedValue([makeNewObs()]) as unknown as ObserveFn;
+			const compact = jest.fn().mockResolvedValue({
+				summary: makeNewObs({ kind: 'summary', payload: 'summary' }),
+			}) as unknown as CompactFn;
+
+			// First cycle: fires (no prior summary).
+			await runObservationalCycle({
+				memory: store,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				observe,
+				compact,
+				compactionMinObservations: 3,
+				compactionIdleMs: 5 * 60 * 1000,
+				compactionBurstThreshold: 5,
+			});
+			expect(compact).toHaveBeenCalledTimes(1);
+
+			// Within window, queue grows to >= burst threshold.
+			jest.advanceTimersByTime(60 * 1000);
+			await store.saveMessages({
+				threadId: 't-1',
+				resourceId: 'u-1',
+				messages: [makeMsg('user', 'next-1'), makeMsg('assistant', 'next-2')],
+			});
+			await store.appendObservations([
+				makeNewObs({ payload: 'b1', createdAt: new Date() }),
+				makeNewObs({ payload: 'b2', createdAt: new Date() }),
+				makeNewObs({ payload: 'b3', createdAt: new Date() }),
+				makeNewObs({ payload: 'b4', createdAt: new Date() }),
+				makeNewObs({ payload: 'b5', createdAt: new Date() }),
+			]);
+
+			const result = await runObservationalCycle({
+				memory: store,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				observe,
+				compact,
+				compactionMinObservations: 3,
+				compactionIdleMs: 5 * 60 * 1000,
+				compactionBurstThreshold: 5,
+			});
+
+			if (result.status !== 'ran') throw new Error('expected status=ran');
+			expect(result.compacted).toBe(true);
+			expect(compact).toHaveBeenCalledTimes(2);
+		});
+
+		it('burst override does not apply when queue stays below the burst threshold', async () => {
+			jest.setSystemTime(new Date('2026-05-05T00:00:00Z'));
+			const store = new InMemoryMemory();
+			await seedThread(store, 't-1', 1);
+			await store.appendObservations([makeNewObs(), makeNewObs()]);
+
+			const observe = jest.fn().mockResolvedValue([makeNewObs()]) as unknown as ObserveFn;
+			const compact = jest.fn().mockResolvedValue({
+				summary: makeNewObs({ kind: 'summary', payload: 'summary' }),
+			}) as unknown as CompactFn;
+
+			await runObservationalCycle({
+				memory: store,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				observe,
+				compact,
+				compactionMinObservations: 3,
+				compactionIdleMs: 5 * 60 * 1000,
+				compactionBurstThreshold: 10,
+			});
+			expect(compact).toHaveBeenCalledTimes(1);
+
+			jest.advanceTimersByTime(60 * 1000);
+			await store.saveMessages({
+				threadId: 't-1',
+				resourceId: 'u-1',
+				messages: [makeMsg('user', 'next-1'), makeMsg('assistant', 'next-2')],
+			});
+			// Only 4 new observations — well below burst threshold of 10.
+			await store.appendObservations([
+				makeNewObs({ payload: 'b1', createdAt: new Date() }),
+				makeNewObs({ payload: 'b2', createdAt: new Date() }),
+				makeNewObs({ payload: 'b3', createdAt: new Date() }),
+				makeNewObs({ payload: 'b4', createdAt: new Date() }),
+			]);
+
+			const result = await runObservationalCycle({
+				memory: store,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				observe,
+				compact,
+				compactionMinObservations: 3,
+				compactionIdleMs: 5 * 60 * 1000,
+				compactionBurstThreshold: 10,
+			});
+
+			if (result.status !== 'ran') throw new Error('expected status=ran');
+			expect(result.compacted).toBe(false);
+			expect(compact).toHaveBeenCalledTimes(1);
+		});
+
+		it('fires again once the idle window has elapsed', async () => {
+			jest.setSystemTime(new Date('2026-05-05T00:00:00Z'));
+			const store = new InMemoryMemory();
+			await seedThread(store, 't-1', 1);
+			await store.appendObservations([makeNewObs(), makeNewObs()]);
+
+			const observe = jest.fn().mockResolvedValue([makeNewObs()]) as unknown as ObserveFn;
+			const compact = jest.fn().mockResolvedValue({
+				summary: makeNewObs({ kind: 'summary', payload: 'summary' }),
+			}) as unknown as CompactFn;
+
+			await runObservationalCycle({
+				memory: store,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				observe,
+				compact,
+				compactionMinObservations: 3,
+				compactionIdleMs: 5 * 60 * 1000,
+			});
+			expect(compact).toHaveBeenCalledTimes(1);
+
+			jest.advanceTimersByTime(6 * 60 * 1000);
+			await store.saveMessages({
+				threadId: 't-1',
+				resourceId: 'u-1',
+				messages: [makeMsg('user', 'next-1'), makeMsg('assistant', 'next-2')],
+			});
+			await store.appendObservations([
+				makeNewObs({ payload: 'b1', createdAt: new Date() }),
+				makeNewObs({ payload: 'b2', createdAt: new Date() }),
+				makeNewObs({ payload: 'b3', createdAt: new Date() }),
+			]);
+
+			const result = await runObservationalCycle({
+				memory: store,
+				scopeKind: 'thread',
+				scopeId: 't-1',
+				observe,
+				compact,
+				compactionMinObservations: 3,
+				compactionIdleMs: 5 * 60 * 1000,
+			});
+
+			if (result.status !== 'ran') throw new Error('expected status=ran');
+			expect(result.compacted).toBe(true);
+			expect(compact).toHaveBeenCalledTimes(2);
+		});
 	});
 });

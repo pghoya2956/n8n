@@ -39,7 +39,8 @@ describe('Memory builder — observational memory', () => {
 			.observationalMemory({
 				observe,
 				compact,
-				compactionRowThreshold: 25,
+				compactionMinObservations: 25,
+				compactionIdleMs: 5 * 60 * 1000,
 				stalenessThresholdMs: 3600_000,
 				formatContext,
 				sync: true,
@@ -48,7 +49,8 @@ describe('Memory builder — observational memory', () => {
 
 		expect(config.observationalMemory?.observe).toBe(observe);
 		expect(config.observationalMemory?.compact).toBe(compact);
-		expect(config.observationalMemory?.compactionRowThreshold).toBe(25);
+		expect(config.observationalMemory?.compactionMinObservations).toBe(25);
+		expect(config.observationalMemory?.compactionIdleMs).toBe(5 * 60 * 1000);
 		expect(config.observationalMemory?.stalenessThresholdMs).toBe(3600_000);
 		expect(config.observationalMemory?.formatContext).toBe(formatContext);
 		expect(config.observationalMemory?.sync).toBe(true);

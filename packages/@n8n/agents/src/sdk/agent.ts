@@ -408,6 +408,15 @@ export class Agent implements BuiltAgent, AgentBuilder {
 	}
 
 	/**
+	 * Remove a previously registered event handler. Pair with `on()` so
+	 * per-request subscribers (e.g. the cli's ExecutionRecorder) can detach
+	 * cleanly between turns instead of accumulating on a long-lived agent.
+	 */
+	off(event: AgentEvent, handler: AgentEventHandler): void {
+		this.eventBus.off(event, handler);
+	}
+
+	/**
 	 * Wrap this agent as a tool for use in multi-agent composition.
 	 * The tool sends a text prompt to this agent and returns the text of the response.
 	 *
@@ -555,6 +564,48 @@ export class Agent implements BuiltAgent, AgentBuilder {
 		observe?: ObserveFn;
 		compact?: CompactFn;
 	}): Promise<{ status: 'no-config' } | RunObservationalCycleResult> {
+		const cycle = await this.buildCycleOpts(opts);
+		if (cycle === null) return { status: 'no-config' };
+		return await runObservationalCycle(cycle);
+	}
+
+	/**
+	 * Schedule an observational-memory cycle on the background-task tracker
+	 * and return immediately. Used by consumers (e.g. the cli's post-stream
+	 * trigger) that want the observer + compactor to run without blocking
+	 * the response. Errors inside the cycle are surfaced via
+	 * `AgentEvent.Error` (source: 'observer' | 'compactor').
+	 *
+	 * No-ops when observational memory isn't configured or no observer is
+	 * available — same `'no-config'` short-circuit as `reflect()`.
+	 */
+	reflectInBackground(opts: {
+		threadId: string;
+		resourceId?: string;
+		observe?: ObserveFn;
+		compact?: CompactFn;
+	}): void {
+		void (async () => {
+			const cycle = await this.buildCycleOpts(opts);
+			if (cycle === null) return;
+			const runtime = await this.ensureBuilt();
+			runtime.scheduleBackgroundCycle(cycle);
+		})();
+	}
+
+	/**
+	 * Build the {@link RunObservationalCycleOpts} from the agent's
+	 * configured observational memory + the per-call overrides. Returns
+	 * `null` when observational memory isn't configured or no observer
+	 * function is available — the shared "no-config" short-circuit for
+	 * both `reflect()` and `reflectInBackground()`.
+	 */
+	private async buildCycleOpts(opts: {
+		threadId: string;
+		resourceId?: string;
+		observe?: ObserveFn;
+		compact?: CompactFn;
+	}) {
 		const obsConfig = this.memoryConfig?.observationalMemory;
 		const memory = this.memoryConfig?.memory;
 		const observe = opts.observe ?? obsConfig?.observe;
@@ -564,7 +615,7 @@ export class Agent implements BuiltAgent, AgentBuilder {
 			typeof (memory as Partial<BuiltObservationStore>).appendObservations !== 'function' ||
 			!observe
 		) {
-			return { status: 'no-config' };
+			return null;
 		}
 		const runtime = await this.ensureBuilt();
 		const telemetry = runtime.getConfiguredTelemetry();
@@ -572,19 +623,25 @@ export class Agent implements BuiltAgent, AgentBuilder {
 			threadId: opts.threadId,
 			...(opts.resourceId !== undefined && { resourceId: opts.resourceId }),
 		});
-		return await runObservationalCycle({
+		return {
 			memory: memory as BuiltMemory & BuiltObservationStore,
 			scopeKind,
 			scopeId,
 			observe,
 			compact: opts.compact ?? obsConfig.compact,
-			...(obsConfig.compactionRowThreshold !== undefined && {
-				compactionRowThreshold: obsConfig.compactionRowThreshold,
+			...(obsConfig.compactionMinObservations !== undefined && {
+				compactionMinObservations: obsConfig.compactionMinObservations,
+			}),
+			...(obsConfig.compactionIdleMs !== undefined && {
+				compactionIdleMs: obsConfig.compactionIdleMs,
+			}),
+			...(obsConfig.compactionBurstThreshold !== undefined && {
+				compactionBurstThreshold: obsConfig.compactionBurstThreshold,
 			}),
 			...(obsConfig.lockTtlMs !== undefined && { lockTtlMs: obsConfig.lockTtlMs }),
 			...(telemetry !== undefined && { telemetry }),
 			eventBus: this.eventBus,
-		});
+		};
 	}
 
 	/** Generate a response (non-streaming). Lazy-builds on first call. */

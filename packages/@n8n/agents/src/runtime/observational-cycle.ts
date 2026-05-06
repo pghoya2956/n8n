@@ -7,6 +7,7 @@ import type {
 	BuiltObservationStore,
 	CompactFn,
 	NewObservation,
+	ObservationCursor,
 	ObserveFn,
 	ScopeKind,
 } from '../types/sdk/observation';
@@ -20,7 +21,23 @@ export interface RunObservationalCycleOpts {
 	scopeId: string;
 	observe: ObserveFn;
 	compact?: CompactFn;
-	compactionRowThreshold?: number;
+	/**
+	 * Minimum number of queued (uncompacted) observations required before
+	 * compaction can fire. When unset, the count gate is disabled.
+	 */
+	compactionMinObservations?: number;
+	/**
+	 * Minimum elapsed time (ms) since the last compaction before another
+	 * one can fire. When unset, the idle gate is disabled. The first
+	 * compaction always fires regardless (no prior `summaryUpdatedAt`).
+	 */
+	compactionIdleMs?: number;
+	/**
+	 * Burst override: when the queue grows to at least this many uncompacted
+	 * observations, fire compaction even if the idle window has not elapsed.
+	 * When unset, no burst override applies and the idle window is strict.
+	 */
+	compactionBurstThreshold?: number;
 	lockTtlMs?: number;
 	telemetry?: BuiltTelemetry;
 	eventBus?: AgentEventBus;
@@ -83,6 +100,8 @@ async function runInsideLock(
 			deltaMessages,
 			currentSummary: previousSummary,
 			cursor,
+			scopeKind,
+			scopeId,
 			telemetry,
 		});
 	} catch (error) {
@@ -98,9 +117,9 @@ async function runInsideLock(
 	await advanceCursor(memory, scopeKind, scopeId, lastMessage);
 
 	let compacted = false;
-	if (compact && opts.compactionRowThreshold !== undefined) {
+	if (compact) {
 		try {
-			compacted = await maybeCompact(opts, previousSummary);
+			compacted = await maybeCompact(opts, cursor, previousSummary);
 		} catch (error) {
 			emitError(eventBus, 'compactor', error);
 		}
@@ -111,17 +130,35 @@ async function runInsideLock(
 
 async function maybeCompact(
 	opts: RunObservationalCycleOpts,
+	cursor: ObservationCursor | null,
 	previousSummary: string | null,
 ): Promise<boolean> {
 	const { memory, scopeKind, scopeId, compact, telemetry } = opts;
-	if (!compact || opts.compactionRowThreshold === undefined) return false;
+	if (!compact) return false;
 
 	const inputs = await memory.getObservations({
 		scopeKind,
 		scopeId,
 		onlyUncompacted: true,
 	});
-	if (inputs.length < opts.compactionRowThreshold) return false;
+	if (inputs.length === 0) return false;
+	if (
+		opts.compactionMinObservations !== undefined &&
+		inputs.length < opts.compactionMinObservations
+	) {
+		return false;
+	}
+	if (opts.compactionIdleMs !== undefined) {
+		const lastSummaryAt = cursor?.summaryUpdatedAt ?? null;
+		if (lastSummaryAt && Date.now() - lastSummaryAt.getTime() < opts.compactionIdleMs) {
+			if (
+				opts.compactionBurstThreshold === undefined ||
+				inputs.length < opts.compactionBurstThreshold
+			) {
+				return false;
+			}
+		}
+	}
 
 	const result = await compact({
 		uncompactedRows: inputs,
