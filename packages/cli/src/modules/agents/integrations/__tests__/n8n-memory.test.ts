@@ -1,5 +1,5 @@
 import { OBSERVATION_SCHEMA_VERSION, type NewObservation } from '@n8n/agents';
-import { In, IsNull, LessThan, LessThanOrEqual, MoreThan } from '@n8n/typeorm';
+import { Equal, In, IsNull, LessThan, LessThanOrEqual, MoreThan } from '@n8n/typeorm';
 import { mock } from 'jest-mock-extended';
 
 import type { AgentMessageEntity } from '../../entities/agent-message.entity';
@@ -356,8 +356,7 @@ describe('N8nMemory', () => {
 			expect(observationRepository.save).not.toHaveBeenCalled();
 		});
 
-		it('allocates seq=1 when the scope is empty', async () => {
-			observationRepository.findOne.mockResolvedValue(null);
+		it('persists rows without allocating a sequence number', async () => {
 			(observationRepository.save as unknown as jest.Mock).mockImplementation(
 				async (input: AgentObservationEntity | AgentObservationEntity[]) =>
 					(Array.isArray(input) ? input : [input]).map((e, i) => ({
@@ -368,46 +367,8 @@ describe('N8nMemory', () => {
 
 			const result = await memory.appendObservations([makeNewObs(), makeNewObs()]);
 
-			expect(observationRepository.findOne).toHaveBeenCalledWith({
-				where: { scopeKind: 'thread', scopeId: 't-1' },
-				order: { seq: 'DESC' },
-			});
-			expect(result.map((r) => r.seq)).toEqual([1, 2]);
-		});
-
-		it('continues seq from the previous max for the scope', async () => {
-			observationRepository.findOne.mockResolvedValue({
-				seq: 7,
-			} as AgentObservationEntity);
-			(observationRepository.save as unknown as jest.Mock).mockImplementation(
-				async (input: AgentObservationEntity | AgentObservationEntity[]) =>
-					(Array.isArray(input) ? input : [input]).map((e, i) => ({
-						...e,
-						id: `obs-${i + 1}`,
-					})),
-			);
-
-			const result = await memory.appendObservations([makeNewObs(), makeNewObs()]);
-			expect(result.map((r) => r.seq)).toEqual([8, 9]);
-		});
-
-		it('queries MAX once per distinct scope, not once per row', async () => {
-			observationRepository.findOne.mockResolvedValue(null);
-			(observationRepository.save as unknown as jest.Mock).mockImplementation(
-				async (input: AgentObservationEntity | AgentObservationEntity[]) =>
-					(Array.isArray(input) ? input : [input]).map((e, i) => ({
-						...e,
-						id: `obs-${i + 1}`,
-					})),
-			);
-
-			await memory.appendObservations([
-				makeNewObs({ scopeId: 'A' }),
-				makeNewObs({ scopeId: 'A' }),
-				makeNewObs({ scopeId: 'B' }),
-			]);
-
-			expect(observationRepository.findOne).toHaveBeenCalledTimes(2);
+			expect(observationRepository.findOne).not.toHaveBeenCalled();
+			expect(result.map((r) => r.id)).toEqual(['obs-1', 'obs-2']);
 		});
 	});
 
@@ -417,10 +378,11 @@ describe('N8nMemory', () => {
 		});
 
 		it('passes filters through to find()', async () => {
+			const sinceCreatedAt = new Date('2026-05-05T00:00:00Z');
 			await memory.getObservations({
 				scopeKind: 'thread',
 				scopeId: 't-1',
-				sinceSeq: 5,
+				since: { sinceCreatedAt, sinceObservationId: 'obs-anchor' },
 				kindIs: 'summary',
 				onlyUncompacted: true,
 				schemaVersionAtMost: 1,
@@ -428,15 +390,26 @@ describe('N8nMemory', () => {
 			});
 
 			expect(observationRepository.find).toHaveBeenCalledWith({
-				where: {
-					scopeKind: 'thread',
-					scopeId: 't-1',
-					seq: MoreThan(5),
-					kind: 'summary',
-					compactedAt: IsNull(),
-					schemaVersion: LessThanOrEqual(1),
-				},
-				order: { seq: 'ASC' },
+				where: [
+					{
+						scopeKind: 'thread',
+						scopeId: 't-1',
+						kind: 'summary',
+						compactedAt: IsNull(),
+						schemaVersion: LessThanOrEqual(1),
+						createdAt: MoreThan(sinceCreatedAt),
+					},
+					{
+						scopeKind: 'thread',
+						scopeId: 't-1',
+						kind: 'summary',
+						compactedAt: IsNull(),
+						schemaVersion: LessThanOrEqual(1),
+						createdAt: Equal(sinceCreatedAt),
+						id: MoreThan('obs-anchor'),
+					},
+				],
+				order: { createdAt: 'ASC', id: 'ASC' },
 				take: 10,
 			});
 		});
@@ -445,8 +418,8 @@ describe('N8nMemory', () => {
 			await memory.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
 
 			expect(observationRepository.find).toHaveBeenCalledWith({
-				where: { scopeKind: 'thread', scopeId: 't-1' },
-				order: { seq: 'ASC' },
+				where: [{ scopeKind: 'thread', scopeId: 't-1' }],
+				order: { createdAt: 'ASC', id: 'ASC' },
 			});
 		});
 
@@ -456,7 +429,6 @@ describe('N8nMemory', () => {
 					id: 'obs-1',
 					scopeKind: 'thread',
 					scopeId: 't-1',
-					seq: '42' as unknown as number,
 					kind: 'observation',
 					payload: { text: 'hi' },
 					durationMs: '1000' as unknown as number | null,
@@ -468,7 +440,6 @@ describe('N8nMemory', () => {
 			]);
 
 			const [row] = await memory.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
-			expect(row.seq).toBe(42);
 			expect(row.durationMs).toBe(1000);
 			expect(row.schemaVersion).toBe(1);
 		});
@@ -497,27 +468,29 @@ describe('N8nMemory', () => {
 			expect(await memory.getCursor('thread', 't-1')).toBeNull();
 		});
 
-		it('coerces bigint lastObservedSeq back to number', async () => {
+		it('reads lastObservedAt and lastObservedMessageId', async () => {
+			const lastObservedAt = new Date('2026-05-05T00:00:00.250Z');
 			observationCursorRepository.findOneBy.mockResolvedValue({
 				scopeKind: 'thread',
 				scopeId: 't-1',
 				lastObservedMessageId: 'm-7',
-				lastObservedSeq: '7' as unknown as number,
+				lastObservedAt,
 				createdAt: new Date(),
 				updatedAt: new Date('2026-05-05T00:00:00Z'),
 			} as AgentObservationCursorEntity);
 
 			const cursor = await memory.getCursor('thread', 't-1');
-			expect(cursor?.lastObservedSeq).toBe(7);
+			expect(cursor?.lastObservedAt.getTime()).toBe(lastObservedAt.getTime());
 			expect(cursor?.lastObservedMessageId).toBe('m-7');
 		});
 
 		it('upserts on setCursor keyed by (scopeKind, scopeId)', async () => {
+			const lastObservedAt = new Date('2026-05-05T00:00:00.500Z');
 			await memory.setCursor({
 				scopeKind: 'thread',
 				scopeId: 't-1',
 				lastObservedMessageId: 'm-9',
-				lastObservedSeq: 9,
+				lastObservedAt,
 				updatedAt: new Date('2026-05-05T00:00:00Z'),
 			});
 
@@ -526,7 +499,7 @@ describe('N8nMemory', () => {
 					scopeKind: 'thread',
 					scopeId: 't-1',
 					lastObservedMessageId: 'm-9',
-					lastObservedSeq: 9,
+					lastObservedAt,
 				}),
 				['scopeKind', 'scopeId'],
 			);

@@ -14,10 +14,10 @@ function makeTempDb(): string {
 	return path.join(os.tmpdir(), `test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
 }
 
-function makeMsg(role: 'user' | 'assistant', text: string): AgentDbMessage {
+function makeMsg(role: 'user' | 'assistant', text: string, createdAt = new Date()): AgentDbMessage {
 	return {
 		id: crypto.randomUUID(),
-		createdAt: new Date(),
+		createdAt,
 		role,
 		content: [{ type: 'text', text }],
 	};
@@ -127,12 +127,13 @@ describe('SqliteMemory — messages', () => {
 
 	it('saves and retrieves messages in order', async () => {
 		const mem = makeMemory(dbPath);
+		const t = Date.now();
 		await mem.saveMessages({
 			threadId: 't-1',
 			messages: [
-				makeMsg('user', 'first'),
-				makeMsg('assistant', 'second'),
-				makeMsg('user', 'third'),
+				makeMsg('user', 'first', new Date(t)),
+				makeMsg('assistant', 'second', new Date(t + 1)),
+				makeMsg('user', 'third', new Date(t + 2)),
 			],
 		});
 
@@ -143,34 +144,55 @@ describe('SqliteMemory — messages', () => {
 		expect(textOf(msgs[2])).toBe('third');
 	});
 
-	it('exposes monotonic seq on read and filters by sinceSeq', async () => {
+	it('filters by since (createdAt, id) keyset', async () => {
 		const mem = makeMemory(dbPath);
-		await mem.saveMessages({ threadId: 't-1', messages: [makeMsg('user', 'one')] });
-		await mem.saveMessages({ threadId: 't-1', messages: [makeMsg('assistant', 'two')] });
-		await mem.saveMessages({ threadId: 't-1', messages: [makeMsg('user', 'three')] });
+		const t = Date.now();
+		await mem.saveMessages({
+			threadId: 't-1',
+			messages: [makeMsg('user', 'one', new Date(t))],
+		});
+		await mem.saveMessages({
+			threadId: 't-1',
+			messages: [makeMsg('assistant', 'two', new Date(t + 1))],
+		});
+		await mem.saveMessages({
+			threadId: 't-1',
+			messages: [makeMsg('user', 'three', new Date(t + 2))],
+		});
 
 		const all = await mem.getMessages('t-1');
-		expect(all.map((m) => m.seq)).toEqual([
-			expect.any(Number),
-			expect.any(Number),
-			expect.any(Number),
-		]);
-		const seqs = all.map((m) => m.seq!);
-		expect(seqs[0]).toBeLessThan(seqs[1]);
-		expect(seqs[1]).toBeLessThan(seqs[2]);
+		expect(all.map(textOf)).toEqual(['one', 'two', 'three']);
 
-		const tail = await mem.getMessages('t-1', { sinceSeq: seqs[0] });
+		const tail = await mem.getMessages('t-1', {
+			since: { sinceCreatedAt: all[0].createdAt, sinceMessageId: all[0].id },
+		});
 		expect(tail.map(textOf)).toEqual(['two', 'three']);
-		expect(await mem.getMessages('t-1', { sinceSeq: seqs[2] })).toEqual([]);
+		expect(
+			await mem.getMessages('t-1', {
+				since: { sinceCreatedAt: all[2].createdAt, sinceMessageId: all[2].id },
+			}),
+		).toEqual([]);
 	});
 
 	it('respects limit — returns last N messages', async () => {
 		const mem = makeMemory(dbPath);
-		// Save messages one at a time to guarantee distinct createdAt timestamps
-		await mem.saveMessages({ threadId: 't-1', messages: [makeMsg('user', 'msg-1')] });
-		await mem.saveMessages({ threadId: 't-1', messages: [makeMsg('assistant', 'msg-2')] });
-		await mem.saveMessages({ threadId: 't-1', messages: [makeMsg('user', 'msg-3')] });
-		await mem.saveMessages({ threadId: 't-1', messages: [makeMsg('assistant', 'msg-4')] });
+		const t = Date.now();
+		await mem.saveMessages({
+			threadId: 't-1',
+			messages: [makeMsg('user', 'msg-1', new Date(t))],
+		});
+		await mem.saveMessages({
+			threadId: 't-1',
+			messages: [makeMsg('assistant', 'msg-2', new Date(t + 1))],
+		});
+		await mem.saveMessages({
+			threadId: 't-1',
+			messages: [makeMsg('user', 'msg-3', new Date(t + 2))],
+		});
+		await mem.saveMessages({
+			threadId: 't-1',
+			messages: [makeMsg('assistant', 'msg-4', new Date(t + 3))],
+		});
 
 		const msgs = await mem.getMessages('t-1', { limit: 2 });
 		expect(msgs).toHaveLength(2);
@@ -398,7 +420,7 @@ describe('SqliteMemory — observation schema', () => {
 		const indexNames = indexes.rows.map((r) => r.name as string);
 		expect(indexNames).toEqual(
 			expect.arrayContaining([
-				expect.stringMatching(/observations_scope_seq/),
+				expect.stringMatching(/observations_scope_keyset/),
 				expect.stringMatching(/observations_scope_kind_created/),
 			]),
 		);
@@ -458,41 +480,40 @@ describe('SqliteMemory — observations', () => {
 		}
 	});
 
-	it('appends rows with assigned id and per-scope monotonic seq', async () => {
+	it('appends rows with assigned ids', async () => {
 		const mem = makeMemory(dbPath);
 		const persisted = await mem.appendObservations([makeObs(), makeObs(), makeObs()]);
 
 		expect(persisted).toHaveLength(3);
-		expect(persisted.map((r) => r.seq)).toEqual([1, 2, 3]);
 		expect(new Set(persisted.map((r) => r.id)).size).toBe(3);
+		expect(persisted.every((r) => typeof r.id === 'string' && r.id.length > 0)).toBe(true);
 	});
 
-	it('seq is per-scope, not global', async () => {
+	it('getObservations returns rows in (createdAt, id) ascending', async () => {
 		const mem = makeMemory(dbPath);
-		const a = await mem.appendObservations([makeObs({ scopeId: 'A' })]);
-		const b = await mem.appendObservations([makeObs({ scopeId: 'B' })]);
-		expect(a[0].seq).toBe(1);
-		expect(b[0].seq).toBe(1);
-	});
-
-	it('getObservations returns rows in seq ascending', async () => {
-		const mem = makeMemory(dbPath);
+		const t = Date.now();
 		await mem.appendObservations([
-			makeObs({ payload: 'first' }),
-			makeObs({ payload: 'second' }),
-			makeObs({ payload: 'third' }),
+			makeObs({ payload: 'first', createdAt: new Date(t) }),
+			makeObs({ payload: 'second', createdAt: new Date(t + 1) }),
+			makeObs({ payload: 'third', createdAt: new Date(t + 2) }),
 		]);
 		const rows = await mem.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
 		expect(rows.map((r) => r.payload)).toEqual(['first', 'second', 'third']);
 	});
 
-	it('filters by sinceSeq, kindIs, onlyUncompacted, schemaVersionAtMost, limit', async () => {
+	it('filters by since (keyset), kindIs, onlyUncompacted, schemaVersionAtMost, limit', async () => {
 		const mem = makeMemory(dbPath);
+		const t = Date.now();
 		const [r1, r2, r3, r4] = await mem.appendObservations([
-			makeObs({ kind: 'observation', payload: 'one' }),
-			makeObs({ kind: 'summary', payload: 'mid' }),
-			makeObs({ kind: 'observation', payload: 'two', schemaVersion: 99 }),
-			makeObs({ kind: 'observation', payload: 'three' }),
+			makeObs({ kind: 'observation', payload: 'one', createdAt: new Date(t) }),
+			makeObs({ kind: 'summary', payload: 'mid', createdAt: new Date(t + 1) }),
+			makeObs({
+				kind: 'observation',
+				payload: 'two',
+				schemaVersion: 99,
+				createdAt: new Date(t + 2),
+			}),
+			makeObs({ kind: 'observation', payload: 'three', createdAt: new Date(t + 3) }),
 		]);
 
 		expect(
@@ -500,7 +521,7 @@ describe('SqliteMemory — observations', () => {
 				await mem.getObservations({
 					scopeKind: 'thread',
 					scopeId: 't-1',
-					sinceSeq: r1.seq,
+					since: { sinceCreatedAt: r1.createdAt, sinceObservationId: r1.id },
 				})
 			).map((r) => r.payload),
 		).toEqual(['mid', 'two', 'three']);
@@ -603,26 +624,28 @@ describe('SqliteMemory — observation cursors', () => {
 
 	it('round-trips and overwrites on re-set', async () => {
 		const mem = makeMemory(dbPath);
+		const at1 = new Date('2026-05-01T12:00:00.500Z');
 		await mem.setCursor({
 			scopeKind: 'thread',
 			scopeId: 't-1',
 			lastObservedMessageId: 'm-1',
-			lastObservedSeq: 5,
+			lastObservedAt: at1,
 			updatedAt: new Date('2026-05-01T12:00:00Z'),
 		});
 		const first = await mem.getCursor('thread', 't-1');
-		expect(first?.lastObservedSeq).toBe(5);
+		expect(first?.lastObservedAt.getTime()).toBe(at1.getTime());
 		expect(first?.lastObservedMessageId).toBe('m-1');
 
+		const at2 = new Date('2026-05-01T13:00:00.250Z');
 		await mem.setCursor({
 			scopeKind: 'thread',
 			scopeId: 't-1',
 			lastObservedMessageId: 'm-9',
-			lastObservedSeq: 9,
+			lastObservedAt: at2,
 			updatedAt: new Date(),
 		});
 		const second = await mem.getCursor('thread', 't-1');
-		expect(second?.lastObservedSeq).toBe(9);
+		expect(second?.lastObservedAt.getTime()).toBe(at2.getTime());
 		expect(second?.lastObservedMessageId).toBe('m-9');
 	});
 
@@ -632,7 +655,7 @@ describe('SqliteMemory — observation cursors', () => {
 			scopeKind: 'thread',
 			scopeId: 'A',
 			lastObservedMessageId: 'm',
-			lastObservedSeq: 1,
+			lastObservedAt: new Date(),
 			updatedAt: new Date(),
 		});
 		expect(await mem.getCursor('thread', 'B')).toBeNull();

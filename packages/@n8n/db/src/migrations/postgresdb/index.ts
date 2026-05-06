@@ -171,8 +171,6 @@ import { AddExecutionDeduplicationKey1778000000000 } from '../common/17780000000
 import { CreateAgentTables1783000000000 } from '../common/1783000000000-CreateAgentTables';
 import { CreateExecutionThreads1783000000001 } from '../common/1783000000001-CreateExecutionThreads';
 import { CreateAgentObservationTables1784000000000 } from '../common/1784000000000-CreateAgentObservationTables';
-import { AddLastObservedAtToObservationCursors1784000000002 } from '../common/1784000000002-AddLastObservedAtToObservationCursors';
-import { DropThreadScopedObservations1784000000003 } from '../common/1784000000003-DropThreadScopedObservations';
 import type { Migration } from '../migration-types';
 
 export const postgresMigrations: Migration[] = [
@@ -349,6 +347,4 @@ export const postgresMigrations: Migration[] = [
 	CreateAgentTables1783000000000,
 	CreateExecutionThreads1783000000001,
 	CreateAgentObservationTables1784000000000,
-	AddLastObservedAtToObservationCursors1784000000002,
-	DropThreadScopedObservations1784000000003,
 ];

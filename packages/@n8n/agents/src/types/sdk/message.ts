@@ -184,9 +184,8 @@ export type CustomAgentMessage = {
 export type AgentMessage = Message | CustomAgentMessage;
 
 /**
- * Persisted message shape returned by `BuiltMemory.getMessages`. `seq` is a
- * monotonic ordinal assigned by the storage backend; populated on read,
- * absent on write (callers don't supply it). Messages saved before backends
- * tracked `seq` may also lack it.
+ * Persisted message shape returned by `BuiltMemory.getMessages`. The
+ * `(createdAt, id)` pair forms the keyset used by observational memory
+ * cursors; both fields are populated on read by every backend.
  */
-export type AgentDbMessage = { id: string; createdAt: Date; seq?: number } & AgentMessage;
+export type AgentDbMessage = { id: string; createdAt: Date } & AgentMessage;

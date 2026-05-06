@@ -20,45 +20,50 @@ function makeRow(overrides: Partial<NewObservation> = {}): NewObservation {
 }
 
 describe('InMemoryMemory — observations', () => {
-	it('appends rows with assigned id and monotonic seq', async () => {
+	it('appends rows with assigned ids', async () => {
 		const mem = new InMemoryMemory();
 		const persisted = await mem.appendObservations([makeRow(), makeRow(), makeRow()]);
 
 		expect(persisted).toHaveLength(3);
-		const seqs = persisted.map((r) => r.seq);
-		expect(seqs[0]).toBeLessThan(seqs[1]);
-		expect(seqs[1]).toBeLessThan(seqs[2]);
 		const ids = persisted.map((r) => r.id);
 		expect(new Set(ids).size).toBe(3);
+		expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
 	});
 
-	it('seq is per-scope, not global', async () => {
+	it('getObservations returns rows in (createdAt, id) ascending', async () => {
 		const mem = new InMemoryMemory();
-		const a = await mem.appendObservations([makeRow({ scopeKind: 'thread', scopeId: 'A' })]);
-		const b = await mem.appendObservations([makeRow({ scopeKind: 'thread', scopeId: 'B' })]);
-		expect(a[0].seq).toBe(b[0].seq);
-	});
-
-	it('getObservations returns rows in seq ascending', async () => {
-		const mem = new InMemoryMemory();
-		await mem.appendObservations([makeRow({ payload: 'first' }), makeRow({ payload: 'second' })]);
+		const t = Date.now();
+		await mem.appendObservations([
+			makeRow({ payload: 'first', createdAt: new Date(t) }),
+			makeRow({ payload: 'second', createdAt: new Date(t + 1) }),
+		]);
 		const rows = await mem.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
 		expect(rows.map((r) => r.payload)).toEqual(['first', 'second']);
 	});
 
-	it('filters by sinceSeq, kindIs, onlyUncompacted, schemaVersionAtMost, limit', async () => {
+	it('filters by since (keyset), kindIs, onlyUncompacted, schemaVersionAtMost, limit', async () => {
 		const mem = new InMemoryMemory();
+		const t = Date.now();
 		const [r1, r2, r3, r4] = await mem.appendObservations([
-			makeRow({ kind: 'observation', payload: 'one' }),
-			makeRow({ kind: 'summary', payload: 'mid' }),
-			makeRow({ kind: 'observation', payload: 'two', schemaVersion: 99 }),
-			makeRow({ kind: 'observation', payload: 'three' }),
+			makeRow({ kind: 'observation', payload: 'one', createdAt: new Date(t) }),
+			makeRow({ kind: 'summary', payload: 'mid', createdAt: new Date(t + 1) }),
+			makeRow({
+				kind: 'observation',
+				payload: 'two',
+				schemaVersion: 99,
+				createdAt: new Date(t + 2),
+			}),
+			makeRow({ kind: 'observation', payload: 'three', createdAt: new Date(t + 3) }),
 		]);
 
 		expect(
-			(await mem.getObservations({ scopeKind: 'thread', scopeId: 't-1', sinceSeq: r1.seq })).map(
-				(r) => r.payload,
-			),
+			(
+				await mem.getObservations({
+					scopeKind: 'thread',
+					scopeId: 't-1',
+					since: { sinceCreatedAt: r1.createdAt, sinceObservationId: r1.id },
+				})
+			).map((r) => r.payload),
 		).toEqual(['mid', 'two', 'three']);
 
 		expect(
@@ -98,6 +103,24 @@ describe('InMemoryMemory — observations', () => {
 		expect(r4.id).toBeDefined();
 	});
 
+	it('keyset since includes rows sharing createdAt with the anchor when id is greater', async () => {
+		const mem = new InMemoryMemory();
+		const t = new Date();
+		const [first, second] = await mem.appendObservations([
+			makeRow({ payload: 'a', createdAt: t }),
+			makeRow({ payload: 'b', createdAt: t }),
+		]);
+		// Sort the two by id so we know which is the anchor.
+		const [low, high] = [first, second].sort((a, b) => (a.id < b.id ? -1 : 1));
+		const rows = await mem.getObservations({
+			scopeKind: 'thread',
+			scopeId: 't-1',
+			since: { sinceCreatedAt: low.createdAt, sinceObservationId: low.id },
+		});
+		expect(rows).toHaveLength(1);
+		expect(rows[0].id).toBe(high.id);
+	});
+
 	it('markObservationsCompacted is idempotent and ignores unknown ids', async () => {
 		const mem = new InMemoryMemory();
 		const [r1] = await mem.appendObservations([makeRow()]);
@@ -123,13 +146,18 @@ describe('InMemoryMemory — cursors', () => {
 			scopeKind: 'thread',
 			scopeId: 't-1',
 			lastObservedMessageId: 'm-1',
-			lastObservedSeq: 5,
+			lastObservedAt: new Date(2026, 0, 1, 0, 0, 0, 5),
 			updatedAt: new Date(2026, 0, 1),
 		};
 		await mem.setCursor(first);
 		expect(await mem.getCursor('thread', 't-1')).toEqual(first);
 
-		const second: ObservationCursor = { ...first, lastObservedSeq: 9, updatedAt: new Date() };
+		const second: ObservationCursor = {
+			...first,
+			lastObservedMessageId: 'm-2',
+			lastObservedAt: new Date(2026, 0, 2),
+			updatedAt: new Date(),
+		};
 		await mem.setCursor(second);
 		expect(await mem.getCursor('thread', 't-1')).toEqual(second);
 	});
@@ -140,7 +168,7 @@ describe('InMemoryMemory — cursors', () => {
 			scopeKind: 'thread',
 			scopeId: 'A',
 			lastObservedMessageId: 'm-A',
-			lastObservedSeq: 1,
+			lastObservedAt: new Date(),
 			updatedAt: new Date(),
 		});
 		expect(await mem.getCursor('thread', 'B')).toBeNull();

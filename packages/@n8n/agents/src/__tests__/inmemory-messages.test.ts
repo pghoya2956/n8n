@@ -1,10 +1,10 @@
 import { InMemoryMemory } from '../runtime/memory-store';
 import type { AgentDbMessage, AgentMessage, Message } from '../types/sdk/message';
 
-function makeMsg(role: 'user' | 'assistant', text: string): AgentDbMessage {
+function makeMsg(role: 'user' | 'assistant', text: string, createdAt = new Date()): AgentDbMessage {
 	return {
 		id: crypto.randomUUID(),
-		createdAt: new Date(),
+		createdAt,
 		role,
 		content: [{ type: 'text', text }],
 	};
@@ -15,31 +15,29 @@ function textOf(msg: AgentMessage): string {
 	return (m.content[0] as { text: string }).text;
 }
 
-describe('InMemoryMemory — message seq + sinceSeq', () => {
-	it('assigns monotonic seq on save and exposes it on read', async () => {
+describe('InMemoryMemory — message keyset reads', () => {
+	it('returns messages ordered by (createdAt, id) ascending', async () => {
 		const mem = new InMemoryMemory();
+		const t = Date.now();
 		await mem.saveMessages({
 			threadId: 't-1',
 			resourceId: 'u-1',
-			messages: [makeMsg('user', 'one'), makeMsg('assistant', 'two')],
+			messages: [makeMsg('user', 'one', new Date(t)), makeMsg('assistant', 'two', new Date(t + 1))],
 		});
 		await mem.saveMessages({
 			threadId: 't-1',
 			resourceId: 'u-1',
-			messages: [makeMsg('user', 'three')],
+			messages: [makeMsg('user', 'three', new Date(t + 2))],
 		});
 
 		const all = await mem.getMessages('t-1');
-		const seqs = all.map((m) => m.seq!);
-		expect(seqs).toEqual([seqs[0], seqs[0] + 1, seqs[0] + 2]);
+		expect(all.map(textOf)).toEqual(['one', 'two', 'three']);
 	});
 
-	it('preserves seq across upsert (re-saving the same id does not advance)', async () => {
+	it('upsert by id preserves identity (re-saving the same id does not duplicate)', async () => {
 		const mem = new InMemoryMemory();
 		const original = makeMsg('user', 'original');
 		await mem.saveMessages({ threadId: 't-1', resourceId: 'u-1', messages: [original] });
-		const [first] = await mem.getMessages('t-1');
-		const originalSeq = first.seq!;
 
 		const edited: AgentDbMessage = {
 			id: original.id,
@@ -49,50 +47,49 @@ describe('InMemoryMemory — message seq + sinceSeq', () => {
 		};
 		await mem.saveMessages({ threadId: 't-1', resourceId: 'u-1', messages: [edited] });
 
-		const [after] = await mem.getMessages('t-1');
-		expect(after.seq).toBe(originalSeq);
-		expect(textOf(after)).toBe('edited');
+		const all = await mem.getMessages('t-1');
+		expect(all).toHaveLength(1);
+		expect(textOf(all[0])).toBe('edited');
 	});
 
-	it('filters by sinceSeq', async () => {
+	it('filters by since (createdAt, id) keyset', async () => {
 		const mem = new InMemoryMemory();
+		const t = Date.now();
 		await mem.saveMessages({
 			threadId: 't-1',
 			resourceId: 'u-1',
-			messages: [makeMsg('user', 'a'), makeMsg('assistant', 'b'), makeMsg('user', 'c')],
+			messages: [
+				makeMsg('user', 'a', new Date(t)),
+				makeMsg('assistant', 'b', new Date(t + 1)),
+				makeMsg('user', 'c', new Date(t + 2)),
+			],
 		});
 
 		const all = await mem.getMessages('t-1');
-		const seqs = all.map((m) => m.seq!);
 
-		const tail = await mem.getMessages('t-1', { sinceSeq: seqs[0] });
+		const tail = await mem.getMessages('t-1', {
+			since: { sinceCreatedAt: all[0].createdAt, sinceMessageId: all[0].id },
+		});
 		expect(tail.map(textOf)).toEqual(['b', 'c']);
 
-		const empty = await mem.getMessages('t-1', { sinceSeq: seqs[2] });
+		const empty = await mem.getMessages('t-1', {
+			since: { sinceCreatedAt: all[2].createdAt, sinceMessageId: all[2].id },
+		});
 		expect(empty).toEqual([]);
 	});
 
-	it('seq is global across threads, not per-thread', async () => {
+	it('keyset since includes rows sharing createdAt with the anchor when id is greater', async () => {
 		const mem = new InMemoryMemory();
-		await mem.saveMessages({
-			threadId: 't-a',
-			resourceId: 'u-1',
-			messages: [makeMsg('user', 'a-1')],
-		});
-		await mem.saveMessages({
-			threadId: 't-b',
-			resourceId: 'u-1',
-			messages: [makeMsg('user', 'b-1')],
-		});
-		await mem.saveMessages({
-			threadId: 't-a',
-			resourceId: 'u-1',
-			messages: [makeMsg('user', 'a-2')],
-		});
+		const at = new Date();
+		const m1 = makeMsg('user', 'a', at);
+		const m2 = makeMsg('user', 'b', at);
+		await mem.saveMessages({ threadId: 't-1', resourceId: 'u-1', messages: [m1, m2] });
 
-		const a = await mem.getMessages('t-a');
-		const b = await mem.getMessages('t-b');
-		expect(a[0].seq).toBeLessThan(b[0].seq!);
-		expect(b[0].seq).toBeLessThan(a[1].seq!);
+		const [low, high] = [m1, m2].sort((a, b) => (a.id < b.id ? -1 : 1));
+		const tail = await mem.getMessages('t-1', {
+			since: { sinceCreatedAt: low.createdAt, sinceMessageId: low.id },
+		});
+		expect(tail).toHaveLength(1);
+		expect(tail[0].id).toBe(high.id);
 	});
 });

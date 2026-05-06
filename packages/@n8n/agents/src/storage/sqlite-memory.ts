@@ -82,13 +82,14 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 				updatedAt TEXT NOT NULL
 			)`,
 				`CREATE TABLE IF NOT EXISTS ${this.ns}messages (
-				seq INTEGER PRIMARY KEY AUTOINCREMENT,
-				id TEXT NOT NULL UNIQUE,
+				id TEXT PRIMARY KEY,
 				threadId TEXT NOT NULL,
 				role TEXT NOT NULL,
 				content TEXT NOT NULL,
 				createdAt TEXT NOT NULL
 			)`,
+				`CREATE INDEX IF NOT EXISTS ${this.ns}messages_thread_keyset
+				ON ${this.ns}messages (threadId, createdAt, id)`,
 				`CREATE TABLE IF NOT EXISTS ${this.ns}working_memory (
 			key TEXT NOT NULL,
 			scope TEXT NOT NULL CHECK(scope IN ('resource', 'thread')),
@@ -100,24 +101,22 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 				id TEXT PRIMARY KEY,
 				scopeKind TEXT NOT NULL CHECK(scopeKind IN ('thread','resource','agent')),
 				scopeId TEXT NOT NULL,
-				seq INTEGER NOT NULL,
 				kind TEXT NOT NULL,
 				payload TEXT NOT NULL,
 				durationMs INTEGER,
 				schemaVersion INTEGER NOT NULL,
 				createdAt TEXT NOT NULL,
-				compactedAt TEXT,
-				UNIQUE(scopeKind, scopeId, seq)
+				compactedAt TEXT
 			)`,
-				`CREATE INDEX IF NOT EXISTS ${this.ns}observations_scope_seq
-				ON ${this.ns}observations (scopeKind, scopeId, seq)`,
+				`CREATE INDEX IF NOT EXISTS ${this.ns}observations_scope_keyset
+				ON ${this.ns}observations (scopeKind, scopeId, createdAt, id)`,
 				`CREATE INDEX IF NOT EXISTS ${this.ns}observations_scope_kind_created
 				ON ${this.ns}observations (scopeKind, scopeId, kind, createdAt DESC)`,
 				`CREATE TABLE IF NOT EXISTS ${this.ns}observation_cursors (
 				scopeKind TEXT NOT NULL CHECK(scopeKind IN ('thread','resource','agent')),
 				scopeId TEXT NOT NULL,
 				lastObservedMessageId TEXT NOT NULL,
-				lastObservedSeq INTEGER NOT NULL,
+				lastObservedAt TEXT NOT NULL,
 				updatedAt TEXT NOT NULL,
 				PRIMARY KEY (scopeKind, scopeId)
 			)`,
@@ -206,7 +205,11 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 
 	async getMessages(
 		threadId: string,
-		opts?: { limit?: number; before?: Date; sinceSeq?: number },
+		opts?: {
+			limit?: number;
+			before?: Date;
+			since?: { sinceCreatedAt: Date; sinceMessageId: string };
+		},
 	): Promise<AgentDbMessage[]> {
 		const db = await this.ensureInitialized();
 
@@ -216,28 +219,34 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 			where.push('createdAt < ?');
 			args.push(opts.before.toISOString());
 		}
-		if (opts?.sinceSeq !== undefined) {
-			where.push('seq > ?');
-			args.push(opts.sinceSeq);
+		if (opts?.since) {
+			// Keyset cursor: rows strictly after `(sinceCreatedAt, sinceMessageId)`
+			// in `(createdAt, id)` order. Tiebreak by id keeps same-millisecond
+			// inserts deterministic.
+			where.push('(createdAt > ? OR (createdAt = ? AND id > ?))');
+			args.push(
+				opts.since.sinceCreatedAt.toISOString(),
+				opts.since.sinceCreatedAt.toISOString(),
+				opts.since.sinceMessageId,
+			);
 		}
 		const whereClause = where.join(' AND ');
 
-		// Use seq (autoincrement) as tiebreaker for messages with identical createdAt timestamps.
 		let sql: string;
 		if (opts?.limit !== undefined) {
 			sql = `SELECT * FROM (
-				SELECT id, threadId, role, content, createdAt, seq
+				SELECT id, threadId, role, content, createdAt
 				FROM ${this.ns}messages
 				WHERE ${whereClause}
-				ORDER BY createdAt DESC, seq DESC
+				ORDER BY createdAt DESC, id DESC
 				LIMIT ?
-			) ORDER BY createdAt ASC, seq ASC`;
+			) ORDER BY createdAt ASC, id ASC`;
 			args.push(opts.limit);
 		} else {
-			sql = `SELECT id, threadId, role, content, createdAt, seq
+			sql = `SELECT id, threadId, role, content, createdAt
 				FROM ${this.ns}messages
 				WHERE ${whereClause}
-				ORDER BY createdAt ASC, seq ASC`;
+				ORDER BY createdAt ASC, id ASC`;
 		}
 
 		const result = await db.execute({ sql, args });
@@ -248,7 +257,6 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 				if (!msg) return undefined;
 				msg.id = row.id as string;
 				msg.createdAt = new Date(row.createdAt as string);
-				msg.seq = Number(row.seq);
 				return msg;
 			})
 			.filter((m): m is AgentDbMessage => m !== undefined);
@@ -479,39 +487,18 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 		if (rows.length === 0) return [];
 		const db = await this.ensureInitialized();
 
-		// Allocate seq values per scope. Single-leader deployment assumed: the
-		// SELECT MAX + INSERT batch happens without external concurrent writers.
-		// (Within a process libsql serializes write transactions, which protects
-		// against same-process concurrency.)
-		const nextSeqByScope = new Map<string, number>();
-		for (const row of rows) {
-			const key = `${row.scopeKind}:${row.scopeId}`;
-			if (!nextSeqByScope.has(key)) {
-				const r = await db.execute({
-					sql: `SELECT COALESCE(MAX(seq), 0) AS m FROM ${this.ns}observations
-						WHERE scopeKind = ? AND scopeId = ?`,
-					args: [row.scopeKind, row.scopeId],
-				});
-				nextSeqByScope.set(key, Number(r.rows[0].m as number) + 1);
-			}
-		}
-
 		const persisted: Observation[] = [];
 		const statements: Array<{ sql: string; args: InArgs }> = [];
 		for (const row of rows) {
-			const key = `${row.scopeKind}:${row.scopeId}`;
-			const seq = nextSeqByScope.get(key)!;
-			nextSeqByScope.set(key, seq + 1);
 			const id = crypto.randomUUID();
 			statements.push({
 				sql: `INSERT INTO ${this.ns}observations
-					(id, scopeKind, scopeId, seq, kind, payload, durationMs, schemaVersion, createdAt, compactedAt)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					(id, scopeKind, scopeId, kind, payload, durationMs, schemaVersion, createdAt, compactedAt)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				args: [
 					id,
 					row.scopeKind,
 					row.scopeId,
-					seq,
 					row.kind,
 					JSON.stringify(row.payload ?? null),
 					row.durationMs,
@@ -520,7 +507,7 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 					row.compactedAt ? row.compactedAt.toISOString() : null,
 				],
 			});
-			persisted.push({ ...row, id, seq });
+			persisted.push({ ...row, id });
 		}
 
 		await db.batch(statements, 'write');
@@ -530,7 +517,7 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 	async getObservations(opts: {
 		scopeKind: ScopeKind;
 		scopeId: string;
-		sinceSeq?: number;
+		since?: { sinceCreatedAt: Date; sinceObservationId: string };
 		kindIs?: string;
 		limit?: number;
 		schemaVersionAtMost?: number;
@@ -540,9 +527,13 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 
 		const where: string[] = ['scopeKind = ?', 'scopeId = ?'];
 		const args: Array<string | number> = [opts.scopeKind, opts.scopeId];
-		if (opts.sinceSeq !== undefined) {
-			where.push('seq > ?');
-			args.push(opts.sinceSeq);
+		if (opts.since) {
+			where.push('(createdAt > ? OR (createdAt = ? AND id > ?))');
+			args.push(
+				opts.since.sinceCreatedAt.toISOString(),
+				opts.since.sinceCreatedAt.toISOString(),
+				opts.since.sinceObservationId,
+			);
 		}
 		if (opts.kindIs !== undefined) {
 			where.push('kind = ?');
@@ -556,10 +547,10 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 			args.push(opts.schemaVersionAtMost);
 		}
 
-		let sql = `SELECT id, scopeKind, scopeId, seq, kind, payload, durationMs, schemaVersion, createdAt, compactedAt
+		let sql = `SELECT id, scopeKind, scopeId, kind, payload, durationMs, schemaVersion, createdAt, compactedAt
 			FROM ${this.ns}observations
 			WHERE ${where.join(' AND ')}
-			ORDER BY seq ASC`;
+			ORDER BY createdAt ASC, id ASC`;
 		if (opts.limit !== undefined) {
 			sql += ' LIMIT ?';
 			args.push(opts.limit);
@@ -570,7 +561,6 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 			id: row.id as string,
 			scopeKind: row.scopeKind as ScopeKind,
 			scopeId: row.scopeId as string,
-			seq: Number(row.seq),
 			kind: row.kind as string,
 			payload: parseJsonSafe(row.payload as string) as Observation['payload'],
 			durationMs: row.durationMs === null ? null : Number(row.durationMs),
@@ -578,6 +568,54 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 			createdAt: new Date(row.createdAt as string),
 			compactedAt: row.compactedAt === null ? null : new Date(row.compactedAt as string),
 		}));
+	}
+
+	async getMessagesForScope(
+		scopeKind: ScopeKind,
+		scopeId: string,
+		opts?: { since?: { sinceCreatedAt: Date; sinceMessageId: string } },
+	): Promise<AgentDbMessage[]> {
+		const db = await this.ensureInitialized();
+
+		const args: Array<string | number> = [];
+		const where: string[] = [];
+		let sql: string;
+		if (scopeKind === 'thread') {
+			where.push('m.threadId = ?');
+			args.push(scopeId);
+			sql = `SELECT m.id, m.threadId, m.role, m.content, m.createdAt
+				FROM ${this.ns}messages m`;
+		} else {
+			// Cross-thread: traverse threads with a matching resourceId. The SDK has
+			// no concept of agent partitioning; consumers needing it (e.g. cli's
+			// N8nMemory) implement their own scope decoding.
+			where.push('t.resourceId = ?');
+			args.push(scopeId);
+			sql = `SELECT m.id, m.threadId, m.role, m.content, m.createdAt
+				FROM ${this.ns}messages m
+				JOIN ${this.ns}threads t ON t.id = m.threadId`;
+		}
+		if (opts?.since) {
+			where.push('(m.createdAt > ? OR (m.createdAt = ? AND m.id > ?))');
+			args.push(
+				opts.since.sinceCreatedAt.toISOString(),
+				opts.since.sinceCreatedAt.toISOString(),
+				opts.since.sinceMessageId,
+			);
+		}
+		sql += ` WHERE ${where.join(' AND ')} ORDER BY m.createdAt ASC, m.id ASC`;
+
+		const result = await db.execute({ sql, args });
+
+		return result.rows
+			.map((row) => {
+				const msg = parseJsonSafe(row.content as string) as AgentDbMessage;
+				if (!msg) return undefined;
+				msg.id = row.id as string;
+				msg.createdAt = new Date(row.createdAt as string);
+				return msg;
+			})
+			.filter((m): m is AgentDbMessage => m !== undefined);
 	}
 
 	async markObservationsCompacted(ids: string[], compactedAt: Date): Promise<void> {
@@ -597,7 +635,7 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 	async getCursor(scopeKind: ScopeKind, scopeId: string): Promise<ObservationCursor | null> {
 		const db = await this.ensureInitialized();
 		const result = await db.execute({
-			sql: `SELECT scopeKind, scopeId, lastObservedMessageId, lastObservedSeq, updatedAt
+			sql: `SELECT scopeKind, scopeId, lastObservedMessageId, lastObservedAt, updatedAt
 				FROM ${this.ns}observation_cursors
 				WHERE scopeKind = ? AND scopeId = ?`,
 			args: [scopeKind, scopeId],
@@ -608,7 +646,7 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 			scopeKind: row.scopeKind as ScopeKind,
 			scopeId: row.scopeId as string,
 			lastObservedMessageId: row.lastObservedMessageId as string,
-			lastObservedSeq: Number(row.lastObservedSeq),
+			lastObservedAt: new Date(row.lastObservedAt as string),
 			updatedAt: new Date(row.updatedAt as string),
 		};
 	}
@@ -617,17 +655,17 @@ export class SqliteMemory extends BaseMemory<SqliteMemoryConfig> implements Buil
 		const db = await this.ensureInitialized();
 		await db.execute({
 			sql: `INSERT INTO ${this.ns}observation_cursors
-				(scopeKind, scopeId, lastObservedMessageId, lastObservedSeq, updatedAt)
+				(scopeKind, scopeId, lastObservedMessageId, lastObservedAt, updatedAt)
 				VALUES (?, ?, ?, ?, ?)
 				ON CONFLICT(scopeKind, scopeId) DO UPDATE SET
 					lastObservedMessageId = excluded.lastObservedMessageId,
-					lastObservedSeq = excluded.lastObservedSeq,
+					lastObservedAt = excluded.lastObservedAt,
 					updatedAt = excluded.updatedAt`,
 			args: [
 				cursor.scopeKind,
 				cursor.scopeId,
 				cursor.lastObservedMessageId,
-				cursor.lastObservedSeq,
+				cursor.lastObservedAt.toISOString(),
 				cursor.updatedAt.toISOString(),
 			],
 		});

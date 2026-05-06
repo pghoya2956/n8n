@@ -19,7 +19,6 @@ interface MessageRow {
 	role: string;
 	content: unknown;
 	createdAt: Date;
-	seq: number;
 }
 
 interface EmbeddingDimRow {
@@ -192,13 +191,17 @@ export class PostgresMemory extends BaseMemory<PostgresConstructorOptions> {
 
 		await pool.query(
 			`CREATE TABLE IF NOT EXISTS ${this.ns}messages (
-				seq SERIAL PRIMARY KEY,
-				id TEXT NOT NULL UNIQUE,
+				id TEXT PRIMARY KEY,
 				"threadId" TEXT NOT NULL,
 				role TEXT NOT NULL,
 				content JSONB NOT NULL,
 				"createdAt" TIMESTAMPTZ NOT NULL
 			)`,
+		);
+
+		await pool.query(
+			`CREATE INDEX IF NOT EXISTS ${this.ns}messages_thread_keyset
+				ON ${this.ns}messages ("threadId", "createdAt", id)`,
 		);
 
 		await pool.query(
@@ -299,7 +302,11 @@ export class PostgresMemory extends BaseMemory<PostgresConstructorOptions> {
 
 	async getMessages(
 		threadId: string,
-		opts?: { limit?: number; before?: Date; sinceSeq?: number },
+		opts?: {
+			limit?: number;
+			before?: Date;
+			since?: { sinceCreatedAt: Date; sinceMessageId: string };
+		},
 	): Promise<AgentDbMessage[]> {
 		const pool = await this.ensureInitialized();
 
@@ -309,28 +316,32 @@ export class PostgresMemory extends BaseMemory<PostgresConstructorOptions> {
 			args.push(opts.before.toISOString());
 			where.push(`"createdAt" < $${args.length}`);
 		}
-		if (opts?.sinceSeq !== undefined) {
-			args.push(opts.sinceSeq);
-			where.push(`seq > $${args.length}`);
+		if (opts?.since) {
+			// Keyset cursor: rows strictly after `(sinceCreatedAt, sinceMessageId)`
+			// in `(createdAt, id)` order.
+			args.push(opts.since.sinceCreatedAt.toISOString());
+			const aIdx = args.length;
+			args.push(opts.since.sinceMessageId);
+			const bIdx = args.length;
+			where.push(`("createdAt" > $${aIdx} OR ("createdAt" = $${aIdx} AND id > $${bIdx}))`);
 		}
 		const whereClause = where.join(' AND ');
 
-		// Use seq (serial) as tiebreaker for messages with identical createdAt timestamps.
 		let sql: string;
 		if (opts?.limit !== undefined) {
 			args.push(opts.limit);
 			sql = `SELECT * FROM (
-				SELECT id, "threadId", role, content, "createdAt", seq
+				SELECT id, "threadId", role, content, "createdAt"
 				FROM ${this.ns}messages
 				WHERE ${whereClause}
-				ORDER BY "createdAt" DESC, seq DESC
+				ORDER BY "createdAt" DESC, id DESC
 				LIMIT $${args.length}
-			) sub ORDER BY "createdAt" ASC, seq ASC`;
+			) sub ORDER BY "createdAt" ASC, id ASC`;
 		} else {
-			sql = `SELECT id, "threadId", role, content, "createdAt", seq
+			sql = `SELECT id, "threadId", role, content, "createdAt"
 				FROM ${this.ns}messages
 				WHERE ${whereClause}
-				ORDER BY "createdAt" ASC, seq ASC`;
+				ORDER BY "createdAt" ASC, id ASC`;
 		}
 
 		const result = await pool.query<MessageRow>(sql, args);
@@ -341,10 +352,9 @@ export class PostgresMemory extends BaseMemory<PostgresConstructorOptions> {
 				// back as a string for any reason, parse it.
 				const content = typeof row.content === 'string' ? parseJsonSafe(row.content) : row.content;
 				if (!content || typeof content !== 'object') return undefined;
-				const msg = content as AgentMessage & { id?: string; createdAt?: Date; seq?: number };
+				const msg = content as AgentMessage & { id?: string; createdAt?: Date };
 				msg.id = row.id;
 				msg.createdAt = new Date(row.createdAt);
-				msg.seq = Number(row.seq);
 				return msg as AgentDbMessage;
 			})
 			.filter((m): m is AgentDbMessage => m !== undefined);

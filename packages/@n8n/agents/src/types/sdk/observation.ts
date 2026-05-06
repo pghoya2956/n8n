@@ -21,7 +21,6 @@ export interface Observation {
 	id: string;
 	scopeKind: ScopeKind;
 	scopeId: string;
-	seq: number;
 	/** Free-form, consumer-defined. The SDK reserves no values. */
 	kind: string;
 	payload: JSONValue;
@@ -33,21 +32,20 @@ export interface Observation {
 	compactedAt: Date | null;
 }
 
-/** Shape passed to `appendObservations`. `id` and `seq` are backend-assigned. */
-export type NewObservation = Omit<Observation, 'id' | 'seq'>;
+/** Shape passed to `appendObservations`. `id` is backend-assigned. */
+export type NewObservation = Omit<Observation, 'id'>;
 
+/**
+ * Per-scope progress marker. The `(lastObservedAt, lastObservedMessageId)` pair
+ * is a keyset cursor: `lastObservedAt` is the primary order key, with
+ * `lastObservedMessageId` breaking `createdAt` ties. The same shape works for
+ * thread-scoped and cross-thread scopes.
+ */
 export interface ObservationCursor {
 	scopeKind: ScopeKind;
 	scopeId: string;
 	lastObservedMessageId: string;
-	lastObservedSeq: number;
-	/**
-	 * Wall-clock `createdAt` of the last observed message. Used as the
-	 * cursor-advance field for cross-thread scopes (`'resource'` / `'agent'`)
-	 * where the per-thread `seq` doesn't linearise the delta. Nullable for
-	 * cursors written before this column existed; populated for all new writes.
-	 */
-	lastObservedAt: Date | null;
+	lastObservedAt: Date;
 	updatedAt: Date;
 }
 
@@ -104,22 +102,24 @@ export type FormatContextFn = (ctx: {
  */
 export interface BuiltObservationStore {
 	/**
-	 * Append observation rows for a scope. Backends assign `id` and `seq` and
-	 * return the persisted shape. Append-only; rows are not mutated after
-	 * insert except via {@link BuiltObservationStore.markObservationsCompacted}.
+	 * Append observation rows for a scope. Backends assign `id` and return the
+	 * persisted shape. Append-only; rows are not mutated after insert except
+	 * via {@link BuiltObservationStore.markObservationsCompacted}.
 	 */
 	appendObservations(rows: NewObservation[]): Promise<Observation[]>;
 	/**
-	 * Query observations for a scope. Filters compose: `sinceSeq` returns
-	 * only rows with `seq > sinceSeq`; `kindIs` matches `kind` exactly;
-	 * `onlyUncompacted` excludes rows with `compactedAt` set;
+	 * Query observations for a scope. Filters compose: `since`, when supplied,
+	 * returns only rows strictly after the keyset `(createdAt, id) >
+	 * (since.sinceCreatedAt, since.sinceObservationId)`; `kindIs` matches
+	 * `kind` exactly; `onlyUncompacted` excludes rows with `compactedAt` set;
 	 * `schemaVersionAtMost` excludes rows whose `schemaVersion` exceeds the
-	 * caller's supported version. Results are ordered by `seq` ascending.
+	 * caller's supported version. Results are ordered by `(createdAt, id)`
+	 * ascending.
 	 */
 	getObservations(opts: {
 		scopeKind: ScopeKind;
 		scopeId: string;
-		sinceSeq?: number;
+		since?: { sinceCreatedAt: Date; sinceObservationId: string };
 		kindIs?: string;
 		limit?: number;
 		schemaVersionAtMost?: number;
@@ -128,18 +128,20 @@ export interface BuiltObservationStore {
 	/**
 	 * Read the message delta the observer needs to process for a given scope.
 	 *
-	 * - `'thread'`: messages for `scopeId` (== threadId) with `seq > sinceSeq`.
+	 * - `'thread'`: messages for `scopeId` (== threadId).
 	 * - `'resource'` / `'agent'`: messages across the threads belonging to the
-	 *   scope, ordered by `createdAt` and filtered by `createdAt > sinceCreatedAt`.
-	 *   The consumer interprets `scopeId` (e.g. cli encodes `${agentId}:${resourceId}`).
+	 *   scope. The consumer interprets `scopeId` (e.g. cli encodes
+	 *   `${agentId}:${resourceId}`).
 	 *
-	 * Returned messages are ordered ascending — the last element is the most
-	 * recently appended.
+	 * When `since` is supplied, only messages strictly after the keyset
+	 * `(createdAt, id) > (since.sinceCreatedAt, since.sinceMessageId)` are
+	 * returned. Results are ordered by `(createdAt, id)` ascending — the last
+	 * element is the most recently appended.
 	 */
 	getMessagesForScope(
 		scopeKind: ScopeKind,
 		scopeId: string,
-		opts?: { sinceSeq?: number; sinceCreatedAt?: Date },
+		opts?: { since?: { sinceCreatedAt: Date; sinceMessageId: string } },
 	): Promise<AgentDbMessage[]>;
 	/** Soft-flag the given rows as compacted; idempotent. */
 	markObservationsCompacted(ids: string[], compactedAt: Date): Promise<void>;

@@ -12,11 +12,20 @@ import type {
 interface StoredMessage {
 	message: AgentDbMessage;
 	createdAt: Date;
-	seq: number;
+	resourceId: string;
 }
 
 function scopeKey(scopeKind: ScopeKind, scopeId: string): string {
 	return `${scopeKind}:${scopeId}`;
+}
+
+function compareKeyset(
+	a: { createdAt: Date; id: string },
+	b: { createdAt: Date; id: string },
+): number {
+	const t = a.createdAt.getTime() - b.createdAt.getTime();
+	if (t !== 0) return t;
+	return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
 /**
@@ -30,8 +39,6 @@ export class InMemoryMemory implements BuiltMemory, BuiltObservationStore {
 	private threads = new Map<string, Thread>();
 
 	private messagesByThread = new Map<string, StoredMessage[]>();
-
-	private nextSeq = 1;
 
 	private workingMemoryByKey = new Map<string, string>();
 
@@ -85,19 +92,35 @@ export class InMemoryMemory implements BuiltMemory, BuiltObservationStore {
 	// eslint-disable-next-line @typescript-eslint/require-await
 	async getMessages(
 		threadId: string,
-		opts?: { limit?: number; before?: Date; sinceSeq?: number },
+		opts?: {
+			limit?: number;
+			before?: Date;
+			since?: { sinceCreatedAt: Date; sinceMessageId: string };
+		},
 	): Promise<AgentDbMessage[]> {
 		let stored = this.messagesByThread.get(threadId) ?? [];
 		if (opts?.before) {
 			const cutoff = opts.before.getTime();
 			stored = stored.filter((s) => s.createdAt.getTime() < cutoff);
 		}
-		if (opts?.sinceSeq !== undefined) {
-			const cursor = opts.sinceSeq;
-			stored = stored.filter((s) => s.seq > cursor);
+		if (opts?.since) {
+			const { sinceCreatedAt, sinceMessageId } = opts.since;
+			stored = stored.filter(
+				(s) =>
+					compareKeyset(
+						{ createdAt: s.createdAt, id: s.message.id },
+						{ createdAt: sinceCreatedAt, id: sinceMessageId },
+					) > 0,
+			);
 		}
+		stored = [...stored].sort((a, b) =>
+			compareKeyset(
+				{ createdAt: a.createdAt, id: a.message.id },
+				{ createdAt: b.createdAt, id: b.message.id },
+			),
+		);
 		if (opts?.limit) stored = stored.slice(-opts.limit);
-		return stored.map((s) => ({ ...s.message, createdAt: s.createdAt, seq: s.seq }));
+		return stored.map((s) => ({ ...s.message, createdAt: s.createdAt }));
 	}
 
 	/**
@@ -114,16 +137,16 @@ export class InMemoryMemory implements BuiltMemory, BuiltObservationStore {
 	}): Promise<void> {
 		const existing = this.messagesByThread.get(args.threadId) ?? [];
 		const byId = new Map(existing.map((s, i) => [s.message.id, i]));
+		const resourceId = args.resourceId ?? '';
 		for (const msg of args.messages) {
 			const idx = byId.get(msg.id);
 			if (idx !== undefined) {
-				// Upsert preserves the original seq so downstream cursors stay valid.
-				existing[idx] = { message: msg, createdAt: msg.createdAt, seq: existing[idx].seq };
+				existing[idx] = { message: msg, createdAt: msg.createdAt, resourceId };
 			} else {
 				const entry: StoredMessage = {
 					message: msg,
 					createdAt: msg.createdAt,
-					seq: this.nextSeq++,
+					resourceId,
 				};
 				byId.set(msg.id, existing.length);
 				existing.push(entry);
@@ -155,11 +178,9 @@ export class InMemoryMemory implements BuiltMemory, BuiltObservationStore {
 		for (const row of rows) {
 			const key = scopeKey(row.scopeKind, row.scopeId);
 			const bucket = this.observationsByScope.get(key) ?? [];
-			const seq = bucket.length > 0 ? bucket[bucket.length - 1].seq + 1 : 1;
 			const obs: Observation = {
 				...row,
 				id: crypto.randomUUID(),
-				seq,
 			};
 			bucket.push(obs);
 			this.observationsByScope.set(key, bucket);
@@ -172,17 +193,25 @@ export class InMemoryMemory implements BuiltMemory, BuiltObservationStore {
 	async getObservations(opts: {
 		scopeKind: ScopeKind;
 		scopeId: string;
-		sinceSeq?: number;
+		since?: { sinceCreatedAt: Date; sinceObservationId: string };
 		kindIs?: string;
 		limit?: number;
 		schemaVersionAtMost?: number;
 		onlyUncompacted?: boolean;
 	}): Promise<Observation[]> {
 		const bucket = this.observationsByScope.get(scopeKey(opts.scopeKind, opts.scopeId)) ?? [];
-		let rows = bucket;
-		if (opts.sinceSeq !== undefined) {
-			const cursor = opts.sinceSeq;
-			rows = rows.filter((r) => r.seq > cursor);
+		let rows = [...bucket].sort((a, b) =>
+			compareKeyset({ createdAt: a.createdAt, id: a.id }, { createdAt: b.createdAt, id: b.id }),
+		);
+		if (opts.since) {
+			const { sinceCreatedAt, sinceObservationId } = opts.since;
+			rows = rows.filter(
+				(r) =>
+					compareKeyset(
+						{ createdAt: r.createdAt, id: r.id },
+						{ createdAt: sinceCreatedAt, id: sinceObservationId },
+					) > 0,
+			);
 		}
 		if (opts.kindIs !== undefined) {
 			const kind = opts.kindIs;
@@ -199,6 +228,45 @@ export class InMemoryMemory implements BuiltMemory, BuiltObservationStore {
 			rows = rows.slice(0, opts.limit);
 		}
 		return rows.map((r) => ({ ...r }));
+	}
+
+	// eslint-disable-next-line @typescript-eslint/require-await
+	async getMessagesForScope(
+		scopeKind: ScopeKind,
+		scopeId: string,
+		opts?: { since?: { sinceCreatedAt: Date; sinceMessageId: string } },
+	): Promise<AgentDbMessage[]> {
+		// Collect candidate messages: thread scope = single thread; resource/agent
+		// scope = every thread whose `resourceId` (or thread id) equals scopeId.
+		// The in-memory backend has no concept of agent partitioning — consumers
+		// that need it (e.g. cli's N8nMemory) implement their own scope decoding.
+		const candidates: StoredMessage[] = [];
+		if (scopeKind === 'thread') {
+			candidates.push(...(this.messagesByThread.get(scopeId) ?? []));
+		} else {
+			for (const messages of this.messagesByThread.values()) {
+				for (const msg of messages) {
+					if (msg.resourceId === scopeId) candidates.push(msg);
+				}
+			}
+		}
+		let rows = [...candidates].sort((a, b) =>
+			compareKeyset(
+				{ createdAt: a.createdAt, id: a.message.id },
+				{ createdAt: b.createdAt, id: b.message.id },
+			),
+		);
+		if (opts?.since) {
+			const { sinceCreatedAt, sinceMessageId } = opts.since;
+			rows = rows.filter(
+				(s) =>
+					compareKeyset(
+						{ createdAt: s.createdAt, id: s.message.id },
+						{ createdAt: sinceCreatedAt, id: sinceMessageId },
+					) > 0,
+			);
+		}
+		return rows.map((s) => ({ ...s.message, createdAt: s.createdAt }));
 	}
 
 	// eslint-disable-next-line @typescript-eslint/require-await

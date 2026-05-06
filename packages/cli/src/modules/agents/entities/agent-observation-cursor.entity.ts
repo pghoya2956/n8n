@@ -1,5 +1,4 @@
-import { datetimeColumnType, WithTimestamps } from '@n8n/db';
-import type { SimpleColumnType } from '@n8n/typeorm/driver/types/ColumnTypes';
+import { DateTimeColumn, WithTimestamps } from '@n8n/db';
 import { Column, Entity, PrimaryColumn } from '@n8n/typeorm';
 
 import type { ObservationScopeKind } from './agent-observation.entity';
@@ -15,15 +14,6 @@ export class AgentObservationCursorEntity extends WithTimestamps {
 	@Column({ type: 'varchar', length: 36 })
 	lastObservedMessageId: string;
 
-	@Column({ type: 'bigint' })
-	lastObservedSeq: number;
-
-	/**
-	 * Wall-clock timestamp of the last observed message. Cross-thread scopes
-	 * (`'resource'` / `'agent'`) advance the cursor by `createdAt` because the
-	 * per-thread `seq` doesn't linearise across threads. Nullable for cursors
-	 * written before this column existed.
-	 */
-	@Column({ type: datetimeColumnType as SimpleColumnType, nullable: true })
-	lastObservedAt: Date | null;
+	@DateTimeColumn()
+	lastObservedAt: Date;
 }

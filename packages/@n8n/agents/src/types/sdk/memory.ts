@@ -38,8 +38,11 @@ export interface BuiltMemory {
 		opts?: {
 			limit?: number; // last N messages
 			before?: Date; // pagination cursor
-			/** Return only messages with `seq > sinceSeq`, ordered ascending. */
-			sinceSeq?: number;
+			/**
+			 * Keyset cursor: return only messages strictly after `(createdAt, id) >
+			 * (since.sinceCreatedAt, since.sinceMessageId)`, ordered ascending.
+			 */
+			since?: { sinceCreatedAt: Date; sinceMessageId: string };
 		},
 	): Promise<AgentDbMessage[]>;
 	/**

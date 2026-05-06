@@ -12,9 +12,6 @@ export class AgentObservationEntity extends WithTimestampsAndStringId {
 	@Column({ type: 'varchar', length: 255 })
 	scopeId: string;
 
-	@Column({ type: 'bigint' })
-	seq: number;
-
 	@Column({ type: 'varchar', length: 64 })
 	kind: string;
 

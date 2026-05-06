@@ -191,16 +191,17 @@ describeWithDocker('PostgresMemory unit tests', () => {
 		await mem.close();
 	});
 
-	it('exposes monotonic seq on read and filters by sinceSeq', async () => {
+	it('filters messages by since (createdAt, id) keyset', async () => {
 		const mem = makePostgresMemory('seq_test');
 		await mem.saveThread({ id: 't1', resourceId: 'u1' });
 
+		const t = Date.now();
 		await mem.saveMessages({
 			threadId: 't1',
 			messages: [
 				{
 					id: 'm1',
-					createdAt: new Date(),
+					createdAt: new Date(t),
 					role: 'user' as const,
 					content: [{ type: 'text' as const, text: 'one' }],
 				},
@@ -211,7 +212,7 @@ describeWithDocker('PostgresMemory unit tests', () => {
 			messages: [
 				{
 					id: 'm2',
-					createdAt: new Date(),
+					createdAt: new Date(t + 1),
 					role: 'assistant' as const,
 					content: [{ type: 'text' as const, text: 'two' }],
 				},
@@ -222,7 +223,7 @@ describeWithDocker('PostgresMemory unit tests', () => {
 			messages: [
 				{
 					id: 'm3',
-					createdAt: new Date(),
+					createdAt: new Date(t + 2),
 					role: 'user' as const,
 					content: [{ type: 'text' as const, text: 'three' }],
 				},
@@ -230,14 +231,18 @@ describeWithDocker('PostgresMemory unit tests', () => {
 		});
 
 		const all = await mem.getMessages('t1');
-		const seqs = all.map((m) => m.seq!);
-		expect(seqs[0]).toBeLessThan(seqs[1]);
-		expect(seqs[1]).toBeLessThan(seqs[2]);
+		expect(all.map((m) => m.id)).toEqual(['m1', 'm2', 'm3']);
 
-		const tail = await mem.getMessages('t1', { sinceSeq: seqs[0] });
+		const tail = await mem.getMessages('t1', {
+			since: { sinceCreatedAt: all[0].createdAt, sinceMessageId: all[0].id },
+		});
 		expect(tail.map((m) => m.id)).toEqual(['m2', 'm3']);
 
-		expect(await mem.getMessages('t1', { sinceSeq: seqs[2] })).toEqual([]);
+		expect(
+			await mem.getMessages('t1', {
+				since: { sinceCreatedAt: all[2].createdAt, sinceMessageId: all[2].id },
+			}),
+		).toEqual([]);
 
 		await mem.close();
 	});

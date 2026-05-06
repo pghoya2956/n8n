@@ -13,8 +13,9 @@ import type {
 } from '@n8n/agents';
 import { Service } from '@n8n/di';
 import type { FindOptionsWhere } from '@n8n/typeorm';
-import { In, IsNull, LessThan, LessThanOrEqual, Like, MoreThan } from '@n8n/typeorm';
+import { Equal, In, IsNull, LessThan, LessThanOrEqual, Like, MoreThan } from '@n8n/typeorm';
 import type { QueryDeepPartialEntity } from '@n8n/typeorm/query-builder/QueryPartialEntity';
+import { UnexpectedError } from 'n8n-workflow';
 
 import type { AgentMessageEntity } from '../entities/agent-message.entity';
 import { AgentObservationEntity } from '../entities/agent-observation.entity';
@@ -202,37 +203,18 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 	async appendObservations(rows: NewObservation[]): Promise<Observation[]> {
 		if (rows.length === 0) return [];
 
-		// Allocate seq values per scope. Single-leader deployment assumed
-		// (per the design); the SELECT MAX + INSERT pair runs without
-		// concurrent writers on the same scope.
-		const nextSeqByScope = new Map<string, number>();
-		for (const row of rows) {
-			const key = `${row.scopeKind}:${row.scopeId}`;
-			if (!nextSeqByScope.has(key)) {
-				const last = await this.observationRepository.findOne({
-					where: { scopeKind: row.scopeKind, scopeId: row.scopeId },
-					order: { seq: 'DESC' },
-				});
-				nextSeqByScope.set(key, last ? Number(last.seq) + 1 : 1);
-			}
-		}
-
-		const entities: AgentObservationEntity[] = rows.map((row) => {
-			const key = `${row.scopeKind}:${row.scopeId}`;
-			const seq = nextSeqByScope.get(key)!;
-			nextSeqByScope.set(key, seq + 1);
-			return this.observationRepository.create({
+		const entities: AgentObservationEntity[] = rows.map((row) =>
+			this.observationRepository.create({
 				scopeKind: row.scopeKind,
 				scopeId: row.scopeId,
-				seq,
 				kind: row.kind,
 				payload: row.payload,
 				durationMs: row.durationMs,
 				schemaVersion: row.schemaVersion,
 				compactedAt: row.compactedAt,
 				createdAt: row.createdAt,
-			});
-		});
+			}),
+		);
 
 		const saved = await this.observationRepository.save(entities);
 		return saved.map((e) => this.toObservation(e));
@@ -241,28 +223,74 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 	async getObservations(opts: {
 		scopeKind: ScopeKind;
 		scopeId: string;
-		sinceSeq?: number;
+		since?: { sinceCreatedAt: Date; sinceObservationId: string };
 		kindIs?: string;
 		limit?: number;
 		schemaVersionAtMost?: number;
 		onlyUncompacted?: boolean;
 	}): Promise<Observation[]> {
-		const where: FindOptionsWhere<AgentObservationEntity> = {
+		const baseWhere: FindOptionsWhere<AgentObservationEntity> = {
 			scopeKind: opts.scopeKind,
 			scopeId: opts.scopeId,
-			...(opts.sinceSeq !== undefined && { seq: MoreThan(opts.sinceSeq) }),
 			...(opts.kindIs !== undefined && { kind: opts.kindIs }),
 			...(opts.onlyUncompacted && { compactedAt: IsNull() }),
 			...(opts.schemaVersionAtMost !== undefined && {
 				schemaVersion: LessThanOrEqual(opts.schemaVersionAtMost),
 			}),
 		};
+		const where: FindOptionsWhere<AgentObservationEntity>[] = opts.since
+			? [
+					{ ...baseWhere, createdAt: MoreThan(opts.since.sinceCreatedAt) },
+					{
+						...baseWhere,
+						createdAt: Equal(opts.since.sinceCreatedAt),
+						id: MoreThan(opts.since.sinceObservationId),
+					},
+				]
+			: [baseWhere];
 		const entities = await this.observationRepository.find({
 			where,
-			order: { seq: 'ASC' },
+			order: { createdAt: 'ASC', id: 'ASC' },
 			...(opts.limit !== undefined && { take: opts.limit }),
 		});
 		return entities.map((e) => this.toObservation(e));
+	}
+
+	async getMessagesForScope(
+		scopeKind: ScopeKind,
+		scopeId: string,
+		opts?: { since?: { sinceCreatedAt: Date; sinceMessageId: string } },
+	): Promise<AgentDbMessage[]> {
+		// Thread branch only at this layer — the resource/agent branches need
+		// agent-partitioning logic that lives alongside the cli's scope encoding
+		// and is added in the cli-integration PR.
+		if (scopeKind !== 'thread') {
+			throw new UnexpectedError(
+				`getMessagesForScope: scopeKind=${scopeKind} is not implemented in this layer`,
+			);
+		}
+
+		const baseWhere: FindOptionsWhere<AgentMessageEntity> = { threadId: scopeId };
+		const where: FindOptionsWhere<AgentMessageEntity>[] = opts?.since
+			? [
+					{ ...baseWhere, createdAt: MoreThan(opts.since.sinceCreatedAt) },
+					{
+						...baseWhere,
+						createdAt: Equal(opts.since.sinceCreatedAt),
+						id: MoreThan(opts.since.sinceMessageId),
+					},
+				]
+			: [baseWhere];
+
+		const entities = await this.messageRepository.find({
+			where,
+			order: { createdAt: 'ASC', id: 'ASC' },
+		});
+		return entities.map((e) => {
+			const msg = e.content as AgentMessage & { id?: string };
+			msg.id = e.id;
+			return msg as AgentDbMessage;
+		});
 	}
 
 	async markObservationsCompacted(ids: string[], compactedAt: Date): Promise<void> {
@@ -282,7 +310,7 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 			scopeKind: entity.scopeKind,
 			scopeId: entity.scopeId,
 			lastObservedMessageId: entity.lastObservedMessageId,
-			lastObservedSeq: Number(entity.lastObservedSeq),
+			lastObservedAt: entity.lastObservedAt,
 			updatedAt: entity.updatedAt,
 		};
 	}
@@ -293,7 +321,7 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 				scopeKind: cursor.scopeKind,
 				scopeId: cursor.scopeId,
 				lastObservedMessageId: cursor.lastObservedMessageId,
-				lastObservedSeq: cursor.lastObservedSeq,
+				lastObservedAt: cursor.lastObservedAt,
 				updatedAt: cursor.updatedAt,
 			},
 			['scopeKind', 'scopeId'],
@@ -351,7 +379,6 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 			id: entity.id,
 			scopeKind: entity.scopeKind,
 			scopeId: entity.scopeId,
-			seq: Number(entity.seq),
 			kind: entity.kind,
 			payload: entity.payload as Observation['payload'],
 			durationMs: entity.durationMs === null ? null : Number(entity.durationMs),
