@@ -334,13 +334,11 @@ export class AgentExecutionService {
 	}> {
 		const scopeId = encodeAgentResourceScopeId(agentId, viewerUserId);
 
-		const [summaryRows, uncompacted] = await Promise.all([
-			this.n8nMemory.getObservations({
-				scopeKind: 'resource',
-				scopeId,
-				kindIs: 'summary',
-				limit: 1,
-			}),
+		// The rolling summary lives on the cursor row (see foundation migration's
+		// agents_observation_cursors.summary column). One row per scope; no
+		// ordering or kind filter needed.
+		const [cursor, uncompacted] = await Promise.all([
+			this.n8nMemory.getCursor('resource', scopeId),
 			this.n8nMemory.getObservations({
 				scopeKind: 'resource',
 				scopeId,
@@ -348,17 +346,10 @@ export class AgentExecutionService {
 			}),
 		]);
 
-		const latest = summaryRows[summaryRows.length - 1] ?? null;
-		const observationCount = uncompacted.filter((r) => r.kind !== 'summary').length;
-
 		return {
-			summary: latest
-				? typeof latest.payload === 'string'
-					? latest.payload
-					: JSON.stringify(latest.payload)
-				: null,
-			summaryUpdatedAt: latest ? latest.createdAt.toISOString() : null,
-			observationCount,
+			summary: cursor?.summary ?? null,
+			summaryUpdatedAt: cursor?.summaryUpdatedAt?.toISOString() ?? null,
+			observationCount: uncompacted.length,
 		};
 	}
 
