@@ -515,9 +515,6 @@ export class AgentsService {
 			if (params.storage === 'n8n') {
 				return this.n8nMemory;
 			}
-			if (params.storage === 'sqlite') {
-				return new agents.SqliteMemory(agents.SqliteMemoryConfigSchema.parse(params));
-			}
 			throw new Error(`Unsupported memory storage: ${params.storage}`);
 		};
 	}

@@ -531,7 +531,7 @@ export function getConfigRulesSection(builderModel: string): string {
 
 - \`model\` must be "provider/model-name" format (e.g. "anthropic/claude-sonnet-4-5")
 - \`credential\` must be the \`credentialName\` returned by a prior resolve_llm or ask_llm tool call. Do not guess.
-- \`memory.storage\` is a preset: "n8n" (recommended, persists in n8n DB), "sqlite", or "postgres"
+- \`memory.storage\` is always "n8n" (persists in the n8n DB)
 - \`memory.lastMessages\` default: 50
 - Use "n8n" as the default memory storage for all agents
 - If the agent has no \`model\`/\`credential\` yet, call resolve_llm or ask_llm before defaulting; only fall back to '${builderModel}' as the in-config placeholder string when the user explicitly declines to pick.`;

@@ -94,11 +94,12 @@ export type FormatContextFn = (ctx: {
 
 /**
  * Storage interface for observational memory. A sibling to {@link BuiltMemory}:
- * implementations typically live on the same class (e.g. `SqliteMemory`
- * implements both), but the interfaces are kept separate so observations stay
- * out of the message-store API and consumers don't need to feature-check every
- * call. When `observationalMemory` is configured on the builder, the
- * configured backend must also implement this interface.
+ * implementations typically live on the same class (cli's `N8nMemory` and the
+ * SDK's `InMemoryMemory` both implement both), but the interfaces are kept
+ * separate so observations stay out of the message-store API and consumers
+ * don't need to feature-check every call. When `observationalMemory` is
+ * configured on the builder, the configured backend must also implement this
+ * interface.
  */
 export interface BuiltObservationStore {
 	/**

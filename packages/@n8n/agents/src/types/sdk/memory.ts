@@ -12,7 +12,7 @@ import type { JSONObject } from '../utils/json';
 export interface MemoryDescriptor<TParams extends JSONObject = JSONObject> {
 	/** Backend name (e.g. 'postgres', 'sqlite', 'memory'). Used as key in memoryRegistry. */
 	name: string;
-	/** Constructor name (e.g. 'PostgresMemory', 'SqliteMemory'). Used to construct the backend. */
+	/** Constructor name. Used to construct the backend. */
 	constructorName: string;
 	/** Non-secret, serializable connection parameters. CredentialConfig refs are safe to store. */
 	connectionParams: TParams | null;
