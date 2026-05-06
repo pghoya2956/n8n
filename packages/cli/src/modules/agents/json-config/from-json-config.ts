@@ -54,7 +54,8 @@ const DEFAULT_WORKING_MEMORY_TEMPLATE = `# Thread memory
 - Resolved or superseded:`;
 
 const DEFAULT_WORKING_MEMORY_INSTRUCTION = [
-	'You have thread-scoped working memory for this conversation.',
+	'Working memory is the live state of THIS conversation — facts, decisions, open follow-ups, current task.',
+	'Even if a fact also belongs in the cross-thread profile below, write it here first; the observer will fold it into the profile asynchronously.',
 	`When the user shares durable facts, preferences, decisions, goals, or unresolved follow-ups that will help later turns in this same thread, call ${UPDATE_WORKING_MEMORY_TOOL_NAME} with the complete updated memory.`,
 	'Treat working memory as a current-state snapshot, not an append-only log.',
 	'Keep it concise, factual, and current.',
@@ -295,9 +296,8 @@ async function resolveToolRef(
 }
 
 const DEFAULT_OBSERVATIONAL_STALENESS_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_OBSERVATIONAL_COMPACTION_MIN_OBSERVATIONS = 3;
 const DEFAULT_OBSERVATIONAL_COMPACTION_IDLE_MS = 5 * 60 * 1000;
-const DEFAULT_OBSERVATIONAL_COMPACTION_BURST_THRESHOLD = 10;
+const DEFAULT_OBSERVATIONAL_COMPACTION_BURST_THRESHOLD = 5;
 
 async function applyMemoryFromConfig(
 	agent: AgentBuilder,
@@ -337,7 +337,6 @@ async function applyMemoryFromConfig(
 			compact,
 			formatContext,
 			getScope: buildAgentResourceScopeResolver(agentId),
-			compactionMinObservations: DEFAULT_OBSERVATIONAL_COMPACTION_MIN_OBSERVATIONS,
 			compactionIdleMs: DEFAULT_OBSERVATIONAL_COMPACTION_IDLE_MS,
 			compactionBurstThreshold: DEFAULT_OBSERVATIONAL_COMPACTION_BURST_THRESHOLD,
 			stalenessThresholdMs:

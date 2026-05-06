@@ -22,20 +22,15 @@ export interface RunObservationalCycleOpts {
 	observe: ObserveFn;
 	compact?: CompactFn;
 	/**
-	 * Minimum number of queued (uncompacted) observations required before
-	 * compaction can fire. When unset, the count gate is disabled.
-	 */
-	compactionMinObservations?: number;
-	/**
 	 * Minimum elapsed time (ms) since the last compaction before another
-	 * one can fire. When unset, the idle gate is disabled. The first
-	 * compaction always fires regardless (no prior `summaryUpdatedAt`).
+	 * one fires. When unset, the idle gate is disabled. The first compaction
+	 * always fires regardless (no prior `summaryUpdatedAt`).
 	 */
 	compactionIdleMs?: number;
 	/**
-	 * Burst override: when the queue grows to at least this many uncompacted
-	 * observations, fire compaction even if the idle window has not elapsed.
-	 * When unset, no burst override applies and the idle window is strict.
+	 * Queue cap: when uncompacted observations reach this count, fire
+	 * compaction even if the idle window has not elapsed. When unset, only
+	 * the idle gate controls cadence.
 	 */
 	compactionBurstThreshold?: number;
 	lockTtlMs?: number;
@@ -129,6 +124,8 @@ async function runInsideLock(
 	return { status: 'ran', observationsWritten: observerRows.length, compacted };
 }
 
+const SUMMARY_HISTORY_LIMIT = 5;
+
 async function maybeCompact(
 	opts: RunObservationalCycleOpts,
 	cursor: ObservationCursor | null,
@@ -137,17 +134,14 @@ async function maybeCompact(
 	const { memory, scopeKind, scopeId, compact, telemetry, eventBus } = opts;
 	if (!compact) return false;
 
-	const inputs = await memory.getObservations({
+	const all = await memory.getObservations({
 		scopeKind,
 		scopeId,
 	});
+	// Filter out summary rows so prior compactions' outputs don't get re-fed
+	// into the compactor as fresh observations.
+	const inputs = all.filter((r) => r.kind !== 'summary');
 	if (inputs.length === 0) return false;
-	if (
-		opts.compactionMinObservations !== undefined &&
-		inputs.length < opts.compactionMinObservations
-	) {
-		return false;
-	}
 	if (opts.compactionIdleMs !== undefined) {
 		const lastSummaryAt = cursor?.summaryUpdatedAt ?? null;
 		if (lastSummaryAt && Date.now() - lastSummaryAt.getTime() < opts.compactionIdleMs) {
@@ -164,6 +158,20 @@ async function maybeCompact(
 		uncompactedRows: inputs,
 		previousSummary,
 		telemetry,
+		getSummaryHistory: async () => {
+			const rows = await memory.getObservations({
+				scopeKind,
+				scopeId,
+				kindIs: 'summary',
+				limit: SUMMARY_HISTORY_LIMIT,
+			});
+			// rows are ASC (oldest first). Drop the latest — it's already
+			// passed as `previousSummary`.
+			return rows
+				.map((r) => (typeof r.payload === 'string' ? r.payload : renderPayload(r.payload)))
+				.filter((s) => s.length > 0)
+				.slice(0, -1);
+		},
 	});
 	const now = new Date();
 	const summaryText =
@@ -171,6 +179,13 @@ async function maybeCompact(
 			? result.summary.payload
 			: renderPayload(result.summary.payload);
 	await memory.setRollingSummary(scopeKind, scopeId, summaryText, now);
+	// Persist the new summary as a `kind: 'summary'` row so future cycles can
+	// read summary history via getSummaryHistory. We override createdAt to
+	// `now` (the compaction timestamp) so summary rows are always ordered by
+	// when compaction completed, regardless of what the consumer wrote.
+	await memory.appendObservations([{ ...result.summary, createdAt: now }]);
+	// Delete only the observation/gap rows we just compacted; summary rows
+	// stay as the durable history.
 	await memory.deleteObservations(inputs.map((r) => r.id));
 	emitCompactionRan(eventBus, scopeKind, scopeId, inputs.length, result.summary.payload);
 	return true;

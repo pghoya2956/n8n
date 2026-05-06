@@ -3,6 +3,7 @@ import type {
 	FormatContextFn,
 	ModelConfig,
 	NewObservation,
+	Observation,
 	ObserveFn,
 	ResolveObservationalScope,
 } from '@n8n/agents';
@@ -10,6 +11,74 @@ import { createModel, OBSERVATION_SCHEMA_VERSION } from '@n8n/agents';
 import { Logger } from '@n8n/backend-common';
 import { Container } from '@n8n/di';
 import { generateText } from 'ai';
+
+/** Closed set of topic tags the observer must pick from. */
+const VALID_TOPICS = new Set([
+	'facts',
+	'preferences',
+	'expertise',
+	'patterns',
+	'constraints',
+	'other',
+]);
+type Topic = 'facts' | 'preferences' | 'expertise' | 'patterns' | 'constraints' | 'other';
+
+/** Humanise a millisecond duration as "3h 14m" / "12m" / "45s". */
+function humanizeMs(ms: number): string {
+	const abs = Math.max(0, Math.floor(ms));
+	const sec = Math.floor(abs / 1000);
+	const min = Math.floor(sec / 60);
+	const hr = Math.floor(min / 60);
+	const day = Math.floor(hr / 24);
+	if (day > 0) return `${day}d ${hr % 24}h`;
+	if (hr > 0) return `${hr}h ${min % 60}m`;
+	if (min > 0) return `${min}m`;
+	return `${sec}s`;
+}
+
+/** Read the `topic` field from an observation row's JSON payload, if any. */
+function topicOf(payload: unknown): Topic | undefined {
+	if (typeof payload !== 'object' || payload === null) return undefined;
+	const t = (payload as { topic?: unknown }).topic;
+	return typeof t === 'string' && VALID_TOPICS.has(t) ? (t as Topic) : undefined;
+}
+
+/** Read the `text` field from a payload, with string-fallback for legacy rows. */
+function textOf(payload: unknown): string {
+	if (typeof payload === 'string') return payload;
+	if (typeof payload === 'object' && payload !== null) {
+		const t = (payload as { text?: unknown }).text;
+		if (typeof t === 'string') return t;
+	}
+	return JSON.stringify(payload);
+}
+
+/** Bucket observations by topic, preserving order within each bucket. */
+function groupByTopic(rows: Observation[]): Map<Topic, Observation[]> {
+	const grouped = new Map<Topic, Observation[]>();
+	for (const row of rows) {
+		const topic = topicOf(row.payload) ?? 'other';
+		const bucket = grouped.get(topic) ?? [];
+		bucket.push(row);
+		grouped.set(topic, bucket);
+	}
+	return grouped;
+}
+
+/** Render grouped observations as `### Topic\n- bullet` markdown sections. */
+function renderGroupedObservations(grouped: Map<Topic, Observation[]>): string {
+	const order: Topic[] = ['facts', 'preferences', 'expertise', 'patterns', 'constraints', 'other'];
+	const sections: string[] = [];
+	for (const topic of order) {
+		const rows = grouped.get(topic);
+		if (!rows || rows.length === 0) continue;
+		sections.push(`### ${topic}`);
+		for (const row of rows) {
+			sections.push(`- ${textOf(row.payload)}`);
+		}
+	}
+	return sections.join('\n');
+}
 
 /**
  * Encode `(agentId, resourceId)` as a single `scopeId` string for resource-
@@ -37,70 +106,98 @@ export function buildAgentResourceScopeResolver(agentId: string): ResolveObserva
 	};
 }
 
-const OBSERVER_PROMPT = `You watch a conversation between a user and an assistant and record only
-BEHAVIOURAL OBSERVATIONS — patterns in how the user engages, not what they say.
+const OBSERVER_PROMPT = `You're keeping notes about this user across all their conversations with
+this agent. Working memory tracks per-thread state. You track CROSS-THREAD
+durable observations: facts, preferences, expertise, patterns, constraints.
 
-A separate "working memory" already captures durable facts and current state
-(user facts, preferences, goals, decisions, open follow-ups, dietary needs,
-guest counts, etc.). Do NOT restate any of that. If your observation could
-sit in working memory, it does not belong here — skip it.
+Your output is JSON Lines (one JSON object per line, no markdown fences).
+Each line has shape:
+  {"kind": "observation", "topic": "<topic>", "text": "<short note>"}
+or
+  {"kind": "gap", "topic": "patterns", "durationMs": <number>, "text": "<short note>"}
 
-What DOES belong here (only emit when truly present in this delta):
-  - Engagement shifts (user re-engaged after a pause; user disengaged; user
-    pushed back; topic-jumped; reset and resumed).
-  - Recurring patterns over multiple turns (user repeatedly asks for
-    directness; user keeps narrowing the same constraint; user seems fatigued).
-  - Friction signals (user rejected a framing; user corrected the assistant;
-    user signalled the assistant is asking too many questions).
-  - Meta-preferences the user expresses about HOW they want to interact (not
-    WHAT they want). Even these usually belong in working memory if durable —
-    only emit if the pattern emerged across several turns rather than a single
-    one-off statement.
+"topic" must be exactly one of:
+  - facts        — durable facts (role, location, ongoing projects, dietary, etc.)
+  - preferences  — interaction style, formats, conventions they prefer
+  - expertise    — what they know well, what they're learning
+  - patterns     — recurring engagement / friction / behavioural arcs
+  - constraints  — recurring limitations they mention (deadlines, budget, infra)
+  - other        — fallback when nothing above fits
 
-Hard NO list (these go in working memory, not here):
-  - Facts ("user has 8 guests", "dietary: 2 vegetarian, 1 GF").
-  - Decisions ("decided pasta night").
-  - Goals / current task / current state.
-  - Single-turn statements of fact or preference.
+"text" should be one short, declarative sentence the agent could read months
+later and still understand without context.
 
-Output format — JSON Lines, no markdown fences. Each line is one of:
-  {"kind": "observation", "text": "<one-sentence behavioural observation>"}
-  {"kind": "gap", "durationMs": <number>, "text": "<short note about the gap>"}
+When to emit a "gap" row:
+  Use the "Time anchors" section in the prompt body (when present) to tell
+  whether a meaningful gap has elapsed since the last observed turn. >1h is
+  usually interesting; <1m is noise; in between, use judgement. Always
+  include "durationMs" for gaps and pick the topic "patterns".
 
-Emit nothing — output an empty response — if no behavioural pattern is
-present in this delta. Most turns produce zero observations. That is the
-expected case.`;
+Quality rules:
+  - Prefer durable observations over momentary ones. If you'd write the same
+    note about anyone in this conversation, skip it.
+  - Don't restate facts the user already wrote into working memory in the
+    current turn. (Working memory is the per-thread state above the
+    transcript; you don't see it here, but the agent will.) Cross-thread
+    durable facts ARE in scope for you — that's the whole point of this log.
+  - Don't echo the assistant's words back. Observe the USER.
+  - Most turns produce zero observations. Empty output is the expected case.
 
-const COMPACTOR_PROMPT = `You're keeping a short, human-friendly note about how this person likes
-to work — not what they're working on. Their goals, decisions, plans, and
-to-dos are tracked separately in working memory; don't repeat any of that
-here.
+Output an empty response when there's nothing durable to add. No fences,
+no preamble, no commentary — only JSON Lines or nothing.`;
 
-What goes in your note:
-  - The way they like to be talked to (terse vs chatty, formal vs casual).
-  - Patterns in how they think, ask questions, or push back.
-  - Frictions you've noticed across multiple turns.
+const COMPACTOR_PROMPT = `You produce a structured user profile across all this user's conversations
+with this agent. The profile is what the agent reads to know who this person
+is when a new thread starts.
 
-Skip:
-  - Anything that sounds like a fact, decision, goal, or current task.
-  - Things you'd guess from one or two messages — only patterns that have
-    shown up several times count.
-  - Restatements of context already obvious from the conversation.
+You receive:
+  - The latest profile (previous rolling summary).
+  - Earlier profile snapshots, oldest → newest, so you can see how the
+    profile has evolved.
+  - Recent observations grouped by topic.
 
-Format: a short markdown bulleted list. Each bullet on its own line,
-starting with "- " (hyphen, space). Three to six bullets is normal. No
-fences, no headers, no preamble — only the list. If nothing notable has
-emerged yet, return an empty string.
+Group what you know by topic. Output is markdown:
 
-Keep the tone friendly and human, like notes you'd jot to remember a
-collaborator's quirks. Not a clinical case study.
+  ### facts
+  - <bullet>
+  - <bullet>
+
+  ### preferences
+  - <bullet>
+
+  ### expertise
+  - <bullet>
+
+(Only include topics that have content. Skip empty sections. 1–6 bullets
+per topic is normal.)
+
+Topics, in order:
+  facts | preferences | expertise | patterns | constraints | other
+
+Rules:
+  - Carry forward what's still durable. Drop what's been superseded by newer
+    observations. Add what's new and durable.
+  - Each bullet should be one short, declarative sentence the agent can
+    read at a glance.
+  - Don't restate the conversation. Don't include per-thread state. Don't
+    include momentary or single-turn observations.
+  - If nothing durable has emerged across all the input, return an empty
+    string.
+
+Output: just the markdown profile (or empty). No fences, no preamble.
 
 Example output:
 
-- prefers terse, direct answers over a lot of back-and-forth
-- often switches context after long pauses and picks up where they left off
-- gets impatient when responses include a lot of explanation about what's
-  happening behind the scenes`;
+### facts
+- Works in finance; lead engineer on a Vue 3 migration project.
+- Based in Berlin, prefers ISO timestamps.
+
+### preferences
+- Wants terse, direct answers; no preamble or recap.
+- Markdown for code, plain text for prose.
+
+### patterns
+- Often pivots topic after long pauses; treats a fresh thread as a fresh start.`;
 
 const SUMMARY_KIND = 'summary';
 
@@ -146,8 +243,21 @@ export function createObservationalMemoryFunctions(
 			})
 			.join('\n');
 
+		const lastObservedAt = ctx.cursor?.lastObservedAt ?? null;
+		const summaryUpdatedAt = ctx.cursor?.summaryUpdatedAt ?? null;
+		const sinceLastTurnMs = lastObservedAt ? Date.now() - lastObservedAt.getTime() : null;
+		const anchors = [
+			lastObservedAt && sinceLastTurnMs !== null
+				? `Last observed turn: ${lastObservedAt.toISOString()} (${humanizeMs(sinceLastTurnMs)} ago)`
+				: '',
+			summaryUpdatedAt ? `Last profile update: ${summaryUpdatedAt.toISOString()}` : '',
+		]
+			.filter(Boolean)
+			.join('\n');
+
 		const prompt = [
-			ctx.currentSummary ? `Current rolling summary:\n${ctx.currentSummary}\n` : '',
+			ctx.currentSummary ? `Current profile:\n${ctx.currentSummary}\n` : '',
+			anchors ? `Time anchors:\n${anchors}\n` : '',
 			`Recent messages:\n${transcript}`,
 		]
 			.filter(Boolean)
@@ -166,13 +276,20 @@ export function createObservationalMemoryFunctions(
 			const trimmed = line.trim();
 			if (!trimmed) continue;
 			try {
-				const parsed = JSON.parse(trimmed) as { kind?: string; text?: string; durationMs?: number };
+				const parsed = JSON.parse(trimmed) as {
+					kind?: string;
+					topic?: string;
+					text?: string;
+					durationMs?: number;
+				};
 				if (!parsed.kind || !parsed.text) continue;
+				const topic: Topic =
+					parsed.topic && VALID_TOPICS.has(parsed.topic) ? (parsed.topic as Topic) : 'other';
 				rows.push({
 					scopeKind: ctx.scopeKind,
 					scopeId: ctx.scopeId,
 					kind: parsed.kind === 'gap' ? 'gap' : 'observation',
-					payload: parsed.text,
+					payload: { topic, text: parsed.text },
 					durationMs: typeof parsed.durationMs === 'number' ? parsed.durationMs : null,
 					schemaVersion: OBSERVATION_SCHEMA_VERSION,
 					createdAt: now,
@@ -185,15 +302,26 @@ export function createObservationalMemoryFunctions(
 	};
 
 	const compact: CompactFn = async (ctx) => {
-		const previous = ctx.previousSummary ? `Previous summary:\n${ctx.previousSummary}\n\n` : '';
-		const recent = ctx.uncompactedRows
-			.map((r) => `- ${typeof r.payload === 'string' ? r.payload : JSON.stringify(r.payload)}`)
+		const history = await ctx.getSummaryHistory();
+		const grouped = groupByTopic(ctx.uncompactedRows);
+
+		const promptBody = [
+			ctx.previousSummary ? `Latest profile:\n${ctx.previousSummary}\n` : '',
+			history.length > 0
+				? `Earlier snapshots (oldest → newest):\n${history
+						.map((s, i) => `--- snapshot ${i + 1} ---\n${s}`)
+						.join('\n')}\n`
+				: '',
+			`Recent observations grouped by topic:\n${renderGroupedObservations(grouped)}\n`,
+			'Updated profile:',
+		]
+			.filter(Boolean)
 			.join('\n');
 
 		const { text } = await generateText({
 			model: createModel(modelConfig),
 			system: COMPACTOR_PROMPT,
-			prompt: `${previous}Recent observations:\n${recent}\n\nNew rolling summary:`,
+			prompt: promptBody,
 			experimental_telemetry: ctx.telemetry?.enabled ? { isEnabled: true } : undefined,
 		});
 
@@ -217,14 +345,14 @@ export function createObservationalMemoryFunctions(
 		const hasContent = ctx.summary !== null || ctx.recentObservations.length > 0;
 		if (!hasContent) return '';
 
-		lines.push('## Observed behavioural patterns');
+		lines.push('## What I know about this user (across all our conversations)');
 		lines.push(
-			'Patterns about HOW the user engages across this thread. Durable facts, decisions, preferences, goals, and current state are tracked separately in working memory above — do not duplicate them here, and prefer working memory when the user shares new facts or makes decisions.',
+			'Durable cross-thread profile. Per-thread state lives in working memory above; this section is the user-level facts, preferences, expertise, and patterns observed across all their threads.',
 		);
 		if (ctx.isStale) {
 			lines.push('');
 			lines.push(
-				'[NOTE] These patterns are older than the configured staleness threshold — verify they still apply before relying on them.',
+				'[NOTE] This profile is older than the configured staleness threshold — verify before relying on specific entries.',
 			);
 		}
 		if (ctx.summary !== null) {
@@ -233,10 +361,11 @@ export function createObservationalMemoryFunctions(
 		}
 		if (ctx.recentObservations.length > 0) {
 			lines.push('');
-			lines.push('### Recent (uncompacted)');
+			lines.push('### Recently observed (not yet folded into the profile)');
 			for (const row of ctx.recentObservations) {
-				const text = typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload);
-				const prefix = row.kind === 'gap' ? '⏸ ' : '• ';
+				const topic = topicOf(row.payload);
+				const text = textOf(row.payload);
+				const prefix = row.kind === 'gap' ? '⏸ ' : topic ? `[${topic}] ` : '• ';
 				lines.push(`${prefix}${text}`);
 			}
 		}

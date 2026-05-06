@@ -32,6 +32,8 @@ import { parseProvider } from '../utils/model-string';
 
 const i18n = useI18n();
 
+const RECENT_MESSAGE_OPTIONS = [5, 10, 25, 50, 100] as const;
+
 const props = withDefaults(
 	defineProps<{ config: AgentJsonConfig | null; disabled?: boolean; collapsible?: boolean }>(),
 	{
@@ -56,6 +58,9 @@ const reasoningEffort = ref<ReasoningEffort>(
 );
 const toolCallConcurrency = ref(props.config?.config?.toolCallConcurrency ?? 1);
 const requireToolApproval = ref(props.config?.config?.requireToolApproval ?? false);
+const lastMessages = ref<number>(props.config?.memory?.lastMessages ?? 10);
+
+const memoryEnabled = computed(() => props.config?.memory?.enabled === true);
 
 watch(
 	() => props.config,
@@ -67,6 +72,7 @@ watch(
 		reasoningEffort.value = (t?.reasoningEffort as ReasoningEffort) ?? 'medium';
 		toolCallConcurrency.value = cfg.config?.toolCallConcurrency ?? 1;
 		requireToolApproval.value = cfg.config?.requireToolApproval ?? false;
+		lastMessages.value = cfg.memory?.lastMessages ?? 10;
 	},
 	{ deep: true },
 );
@@ -125,6 +131,15 @@ function onApprovalToggle(value: boolean) {
 	});
 }
 
+function onLastMessagesChange(value: unknown) {
+	const count = typeof value === 'number' ? value : Number(value);
+	if (!Number.isFinite(count)) return;
+	lastMessages.value = count;
+	const memory = props.config?.memory;
+	if (!memory) return;
+	emit('update:config', { memory: { ...memory, lastMessages: count } });
+}
+
 const thinkingDisabledReason = computed(() =>
 	capabilities.value.thinking
 		? ''
@@ -135,6 +150,12 @@ const thinkingDisabledReason = computed(() =>
 						i18n.baseText('agents.builder.advanced.thinking.unsupportedProviderFallback'),
 				},
 			}),
+);
+
+const recentMessagesDisabledReason = computed(() =>
+	memoryEnabled.value
+		? ''
+		: i18n.baseText('agents.builder.advanced.recentMessages.memoryDisabledTooltip'),
 );
 </script>
 
@@ -237,6 +258,38 @@ const thinkingDisabledReason = computed(() =>
 					data-testid="agent-require-approval-toggle"
 					@update:model-value="(v) => onApprovalToggle(Boolean(v))"
 				/>
+			</div>
+
+			<div :class="$style.row">
+				<div :class="$style.rowLabel">
+					<N8nText size="small" :bold="true">{{
+						i18n.baseText('agents.builder.advanced.recentMessages.label')
+					}}</N8nText>
+					<N8nText size="xsmall" color="text-light">
+						{{ i18n.baseText('agents.builder.advanced.recentMessages.hint') }}
+					</N8nText>
+				</div>
+				<N8nTooltip
+					:content="recentMessagesDisabledReason"
+					:disabled="memoryEnabled"
+					placement="top"
+				>
+					<N8nSelect
+						:model-value="lastMessages"
+						size="small"
+						:disabled="!memoryEnabled || props.disabled"
+						:class="$style.shortInput"
+						data-testid="agent-last-messages-select"
+						@update:model-value="onLastMessagesChange"
+					>
+						<N8nOption
+							v-for="option in RECENT_MESSAGE_OPTIONS"
+							:key="option"
+							:value="option"
+							:label="String(option)"
+						/>
+					</N8nSelect>
+				</N8nTooltip>
 			</div>
 		</div>
 	</N8nCollapsiblePanel>

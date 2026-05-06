@@ -1924,9 +1924,6 @@ export class AgentRuntime {
 			scopeId,
 			observe,
 			...(obsConfig.compact !== undefined && { compact: obsConfig.compact }),
-			...(obsConfig.compactionMinObservations !== undefined && {
-				compactionMinObservations: obsConfig.compactionMinObservations,
-			}),
 			...(obsConfig.compactionIdleMs !== undefined && {
 				compactionIdleMs: obsConfig.compactionIdleMs,
 			}),

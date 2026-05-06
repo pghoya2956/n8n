@@ -114,23 +114,23 @@ const i18n = useI18n();
 					</N8nCard>
 
 					<N8nCard variant="outlined" :class="$style.card">
-						<AgentMemoryView
-							:config="localConfig"
-							:project-id="projectId"
-							:agent-id="agentId"
-							:disabled="isBuildChatStreaming"
-							data-testid="agent-memory-panel"
-							@update:config="emit('update:config', $event)"
-						/>
-					</N8nCard>
-
-					<N8nCard variant="outlined" :class="$style.card">
-						<AgentMemoryPanel
-							:config="localConfig"
-							:disabled="isBuildChatStreaming"
-							embedded
-							@update:config="emit('update:config', $event)"
-						/>
+						<div :class="$style.memoryStack">
+							<AgentMemoryPanel
+								:config="localConfig"
+								:disabled="isBuildChatStreaming"
+								embedded
+								@update:config="emit('update:config', $event)"
+							/>
+							<hr :class="$style.memoryDivider" />
+							<AgentMemoryView
+								:config="localConfig"
+								:project-id="projectId"
+								:agent-id="agentId"
+								:disabled="isBuildChatStreaming"
+								data-testid="agent-memory-panel"
+								@update:config="emit('update:config', $event)"
+							/>
+						</div>
 					</N8nCard>
 
 					<N8nCard variant="outlined" :class="$style.card">
@@ -248,5 +248,18 @@ const i18n = useI18n();
 	display: flex;
 	flex-direction: column;
 	width: 100%;
+}
+
+.memoryStack {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing--lg);
+	width: 100%;
+}
+
+.memoryDivider {
+	border: none;
+	border-top: var(--border-width) var(--border-style) var(--color--foreground);
+	margin: 0;
 }
 </style>

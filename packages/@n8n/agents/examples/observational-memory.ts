@@ -195,7 +195,7 @@ const memory = new Memory()
 	.observationalMemory({
 		observe,
 		compact,
-		compactionMinObservations: 5,
+		compactionBurstThreshold: 5,
 		stalenessThresholdMs: ONE_DAY_MS,
 		formatContext,
 	});

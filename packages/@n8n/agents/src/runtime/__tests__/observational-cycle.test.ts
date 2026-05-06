@@ -169,26 +169,6 @@ describe('runObservationalCycle', () => {
 		expect(cursor).toBeNull();
 	});
 
-	it('does not call compact when threshold is not crossed', async () => {
-		const store = new InMemoryMemory();
-		await seedThread(store, 't-1', 1);
-
-		const observe = jest.fn().mockResolvedValue([makeNewObs()]) as unknown as ObserveFn;
-		const compact = jest.fn() as unknown as CompactFn;
-
-		const result = await runObservationalCycle({
-			memory: store,
-			scopeKind: 'thread',
-			scopeId: 't-1',
-			observe,
-			compact,
-			compactionMinObservations: 5,
-		});
-
-		expect(result).toEqual({ status: 'ran', observationsWritten: 1, compacted: false });
-		expect(compact).not.toHaveBeenCalled();
-	});
-
 	it('runs compact when threshold crossed: writes summary to cursor, flags inputs as compacted', async () => {
 		const store = new InMemoryMemory();
 		await seedThread(store, 't-1', 1);
@@ -212,7 +192,6 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe,
 			compact,
-			compactionMinObservations: 3,
 		});
 
 		if (result.status !== 'ran') throw new Error('expected status=ran');
@@ -223,9 +202,11 @@ describe('runObservationalCycle', () => {
 		expect(cursor?.summary).toBe('compacted summary');
 		expect(cursor?.summaryUpdatedAt).toBeInstanceOf(Date);
 
-		// All input observations got hard-deleted from the table.
+		// Observation/gap rows are hard-deleted; the new summary row stays
+		// behind as durable history.
 		const remaining = await store.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
-		expect(remaining).toHaveLength(0);
+		expect(remaining.map((r) => r.kind)).toEqual(['summary']);
+		expect(remaining[0].payload).toBe('compacted summary');
 	});
 
 	it('compacting a second time replaces the rolling summary on the cursor', async () => {
@@ -248,7 +229,6 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe,
 			compact,
-			compactionMinObservations: 3,
 		});
 
 		// Reset thread for a second cycle: append more messages + observations.
@@ -269,7 +249,6 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe,
 			compact,
-			compactionMinObservations: 3,
 		});
 
 		// Compactor was given the previous summary as input on the second run.
@@ -277,9 +256,87 @@ describe('runObservationalCycle', () => {
 		expect(compactCalls[0][0].previousSummary).toBeNull();
 		expect(compactCalls[1][0].previousSummary).toBe('summary v1');
 
-		// Cursor now holds only the latest summary — no accumulating rows.
+		// Cursor holds the latest; summary history accumulates as `kind: 'summary'`
+		// rows in the observations table.
 		const cursor = await store.getCursor('thread', 't-1');
 		expect(cursor?.summary).toBe('summary v2');
+		const summaryRows = await store.getObservations({
+			scopeKind: 'thread',
+			scopeId: 't-1',
+			kindIs: 'summary',
+		});
+		// Both summaries persisted; ordering between them isn't asserted here
+		// because back-to-back cycles can collide on millisecond timestamps.
+		// The dedicated history-thunk test below uses fake timers to verify
+		// oldest-first ordering.
+		expect(summaryRows).toHaveLength(2);
+		expect(summaryRows.map((r) => r.payload).sort()).toEqual(['summary v1', 'summary v2']);
+	});
+
+	it('compactor receives a getSummaryHistory thunk that yields prior summaries oldest-first, excluding the latest', async () => {
+		jest.useFakeTimers({ doNotFake: ['nextTick'] });
+		try {
+			jest.setSystemTime(new Date('2026-05-05T00:00:00Z'));
+			const store = new InMemoryMemory();
+			await seedThread(store, 't-1', 1);
+
+			const observe = jest.fn().mockResolvedValue([makeNewObs()]) as unknown as ObserveFn;
+
+			// On the third cycle, capture what `getSummaryHistory()` returns.
+			let capturedHistory: string[] | undefined;
+			const compact = jest
+				.fn()
+				.mockResolvedValueOnce({ summary: makeNewObs({ kind: 'summary', payload: 's1' }) })
+				.mockResolvedValueOnce({ summary: makeNewObs({ kind: 'summary', payload: 's2' }) })
+				.mockImplementationOnce(async (ctx: Parameters<CompactFn>[0]) => {
+					capturedHistory = await ctx.getSummaryHistory();
+					return { summary: makeNewObs({ kind: 'summary', payload: 's3' }) };
+				}) as unknown as CompactFn;
+
+			// Three cycles, each separated by a minute so messages and obs have
+			// distinct timestamps. Each cycle adds a fresh delta + obs pile so
+			// compact fires.
+			for (let i = 0; i < 3; i++) {
+				jest.advanceTimersByTime(60_000);
+				const t = Date.now();
+				await store.saveMessages({
+					threadId: 't-1',
+					resourceId: 'u-1',
+					messages: [
+						{
+							id: `m-${i}`,
+							createdAt: new Date(t),
+							role: 'user',
+							content: [{ type: 'text', text: `q${i}` }],
+						},
+						{
+							id: `a-${i}`,
+							createdAt: new Date(t + 1),
+							role: 'assistant',
+							content: [{ type: 'text', text: `r${i}` }],
+						},
+					],
+				});
+				await store.appendObservations([
+					makeNewObs({ payload: `obs-${i}-a`, createdAt: new Date(t + 2) }),
+					makeNewObs({ payload: `obs-${i}-b`, createdAt: new Date(t + 3) }),
+				]);
+				await runObservationalCycle({
+					memory: store,
+					scopeKind: 'thread',
+					scopeId: 't-1',
+					observe,
+					compact,
+				});
+			}
+
+			// On the third cycle, prior summaries are s1 and s2; previousSummary is s2;
+			// getSummaryHistory should return [s1] (oldest-first, latest dropped).
+			expect((compact as unknown as jest.Mock).mock.calls).toHaveLength(3);
+			expect(capturedHistory).toEqual(['s1']);
+		} finally {
+			jest.useRealTimers();
+		}
 	});
 
 	it('catches compact() errors and emits AgentEvent.Error tagged compactor (still returns ran)', async () => {
@@ -302,7 +359,6 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe,
 			compact,
-			compactionMinObservations: 1,
 			eventBus: bus,
 		});
 
@@ -339,7 +395,6 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe: observe as unknown as ObserveFn,
 			compact: compact as unknown as CompactFn,
-			compactionMinObservations: 1,
 			telemetry,
 		});
 
@@ -440,7 +495,6 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			observe,
 			compact,
-			compactionMinObservations: 3,
 			eventBus: bus,
 		});
 
@@ -477,7 +531,6 @@ describe('runObservationalCycle', () => {
 				scopeId: 't-1',
 				observe,
 				compact,
-				compactionMinObservations: 3,
 				compactionIdleMs: 5 * 60 * 1000,
 			});
 
@@ -504,7 +557,6 @@ describe('runObservationalCycle', () => {
 				scopeId: 't-1',
 				observe,
 				compact,
-				compactionMinObservations: 3,
 				compactionIdleMs: 5 * 60 * 1000,
 			});
 			expect(compact).toHaveBeenCalledTimes(1);
@@ -529,7 +581,6 @@ describe('runObservationalCycle', () => {
 				scopeId: 't-1',
 				observe,
 				compact,
-				compactionMinObservations: 3,
 				compactionIdleMs: 5 * 60 * 1000,
 			});
 
@@ -556,7 +607,6 @@ describe('runObservationalCycle', () => {
 				scopeId: 't-1',
 				observe,
 				compact,
-				compactionMinObservations: 3,
 				compactionIdleMs: 5 * 60 * 1000,
 				compactionBurstThreshold: 5,
 			});
@@ -583,7 +633,6 @@ describe('runObservationalCycle', () => {
 				scopeId: 't-1',
 				observe,
 				compact,
-				compactionMinObservations: 3,
 				compactionIdleMs: 5 * 60 * 1000,
 				compactionBurstThreshold: 5,
 			});
@@ -610,7 +659,6 @@ describe('runObservationalCycle', () => {
 				scopeId: 't-1',
 				observe,
 				compact,
-				compactionMinObservations: 3,
 				compactionIdleMs: 5 * 60 * 1000,
 				compactionBurstThreshold: 10,
 			});
@@ -636,7 +684,6 @@ describe('runObservationalCycle', () => {
 				scopeId: 't-1',
 				observe,
 				compact,
-				compactionMinObservations: 3,
 				compactionIdleMs: 5 * 60 * 1000,
 				compactionBurstThreshold: 10,
 			});
@@ -663,7 +710,6 @@ describe('runObservationalCycle', () => {
 				scopeId: 't-1',
 				observe,
 				compact,
-				compactionMinObservations: 3,
 				compactionIdleMs: 5 * 60 * 1000,
 			});
 			expect(compact).toHaveBeenCalledTimes(1);
@@ -686,7 +732,6 @@ describe('runObservationalCycle', () => {
 				scopeId: 't-1',
 				observe,
 				compact,
-				compactionMinObservations: 3,
 				compactionIdleMs: 5 * 60 * 1000,
 			});
 

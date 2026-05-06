@@ -87,6 +87,12 @@ export type ObserveFn = (ctx: {
 export type CompactFn = (ctx: {
 	uncompactedRows: Observation[];
 	previousSummary: string | null;
+	/**
+	 * Returns the most-recent N summary texts for this scope, oldest-first
+	 * and excluding the previous-summary already passed in `previousSummary`.
+	 * Empty array if no prior summaries exist. Default N = 5.
+	 */
+	getSummaryHistory: () => Promise<string[]>;
 	telemetry: BuiltTelemetry | undefined;
 }) => Promise<{ summary: NewObservation }>;
 
@@ -217,20 +223,15 @@ export interface ObservationalMemoryConfig {
 	 */
 	getScope?: ResolveObservationalScope;
 	/**
-	 * Minimum number of queued (uncompacted) observations required before
-	 * the compactor can fire. When unset, the count gate is disabled.
-	 */
-	compactionMinObservations?: number;
-	/**
-	 * Minimum elapsed time (ms) since the last compaction before another
-	 * one can fire. When unset, the idle gate is disabled. The first
-	 * compaction always fires regardless (no prior `summaryUpdatedAt`).
+	 * Minimum elapsed time (ms) since the last compaction before another one
+	 * fires. When unset, the idle gate is disabled. The first compaction
+	 * always fires regardless (no prior `summaryUpdatedAt`).
 	 */
 	compactionIdleMs?: number;
 	/**
-	 * Burst override: when the queue grows to at least this many uncompacted
-	 * observations, fire compaction even if the idle window has not elapsed.
-	 * When unset, no burst override applies and the idle window is strict.
+	 * Queue cap: when uncompacted observations reach this count, fire
+	 * compaction even if the idle window has not elapsed. When unset, only
+	 * the idle gate controls cadence.
 	 */
 	compactionBurstThreshold?: number;
 	/**

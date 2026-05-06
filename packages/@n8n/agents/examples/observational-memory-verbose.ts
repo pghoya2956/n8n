@@ -206,8 +206,8 @@ const sqlite = new SqliteMemory({ url: 'file::memory:' });
 const memory = new Memory().storage(sqlite).observationalMemory({
 	observe,
 	compact,
-	// Low threshold so you actually see the compactor fire in a 5-turn run.
-	compactionMinObservations: 4,
+	// Low burst threshold so you actually see the compactor fire in a 5-turn run.
+	compactionBurstThreshold: 4,
 	stalenessThresholdMs: 24 * 60 * 60 * 1000,
 	formatContext,
 });

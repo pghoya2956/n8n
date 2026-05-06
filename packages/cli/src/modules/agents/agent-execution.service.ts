@@ -334,18 +334,19 @@ export class AgentExecutionService {
 	}> {
 		const scopeId = encodeAgentResourceScopeId(agentId, viewerUserId);
 
-		// The rolling summary lives on the cursor row (see foundation migration's
-		// agents_observation_cursors.summary column). One row per scope; no
-		// ordering or kind filter needed.
-		// Hard-delete on compact means every row in the table is by definition
-		// part of the in-flight queue (compacted rows are deleted, not flagged).
-		const [cursor, queued] = await Promise.all([
+		// The rolling summary lives on the cursor row. The agents_observations
+		// table holds two kinds of rows: live `observation`/`gap` entries waiting
+		// to be compacted (the queue), and `summary` rows preserved as profile
+		// history. Only the former are "queued" for the next compaction.
+		const [cursor, allRows] = await Promise.all([
 			this.n8nMemory.getCursor('resource', scopeId),
 			this.n8nMemory.getObservations({
 				scopeKind: 'resource',
 				scopeId,
 			}),
 		]);
+
+		const queued = allRows.filter((r) => r.kind !== 'summary');
 
 		return {
 			summary: cursor?.summary ?? null,

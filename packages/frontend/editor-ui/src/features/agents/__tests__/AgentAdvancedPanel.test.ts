@@ -1,6 +1,6 @@
 /* eslint-disable import-x/no-extraneous-dependencies -- test-only pattern */
 import { describe, it, expect, vi } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { mount, type VueWrapper } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import type * as VueUse from '@vueuse/core';
 
@@ -127,5 +127,37 @@ describe('AgentAdvancedPanel', () => {
 		expect(toggle.attributes('disabled')).toBeDefined();
 		const concurrency = wrapper.find('[data-testid="agent-concurrency-input"]');
 		expect(concurrency.attributes('disabled')).toBeDefined();
+	});
+
+	it('wires the recent-messages dropdown to memory.lastMessages, disabled when memory is off', async () => {
+		const enabledConfig = makeConfig({
+			memory: { enabled: true, storage: 'n8n', lastMessages: 10 },
+		} as Partial<AgentJsonConfig>);
+		const wrapper = mount(AgentAdvancedPanel, {
+			props: { config: enabledConfig },
+			global: { stubs: globalStubs },
+		});
+		await nextTick();
+
+		const select = wrapper.findComponent(
+			'[data-testid="agent-last-messages-select"]',
+		) as unknown as VueWrapper;
+		await select.vm.$emit('update:modelValue', 25);
+		const events = wrapper.emitted('update:config') ?? [];
+		const last = events[events.length - 1][0] as Partial<AgentJsonConfig>;
+		expect(last.memory).toEqual({ enabled: true, storage: 'n8n', lastMessages: 25 });
+
+		const disabledWrapper = mount(AgentAdvancedPanel, {
+			props: {
+				config: makeConfig({
+					memory: { enabled: false, storage: 'n8n', lastMessages: 10 },
+				} as Partial<AgentJsonConfig>),
+			},
+			global: { stubs: globalStubs },
+		});
+		const disabledSelect = disabledWrapper.findComponent(
+			'[data-testid="agent-last-messages-select"]',
+		) as unknown as VueWrapper;
+		expect(disabledSelect.props('disabled')).toBe(true);
 	});
 });

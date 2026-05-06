@@ -629,9 +629,6 @@ export class Agent implements BuiltAgent, AgentBuilder {
 			scopeId,
 			observe,
 			compact: opts.compact ?? obsConfig.compact,
-			...(obsConfig.compactionMinObservations !== undefined && {
-				compactionMinObservations: obsConfig.compactionMinObservations,
-			}),
 			...(obsConfig.compactionIdleMs !== undefined && {
 				compactionIdleMs: obsConfig.compactionIdleMs,
 			}),
