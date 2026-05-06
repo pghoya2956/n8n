@@ -63,14 +63,19 @@ function onMemoryToggle(enabled: boolean) {
 		:class="[$style.container, props.disabled && $style.disabled]"
 		:inert="props.disabled || undefined"
 	>
-		<div :class="$style.header">
-			<N8nText tag="h3" :bold="true">{{ i18n.baseText('agents.builder.memory.title') }}</N8nText>
-			<N8nSwitch
-				:model-value="memory !== null"
-				:disabled="props.disabled"
-				data-testid="agent-memory-toggle"
-				@update:model-value="onMemoryToggle"
-			/>
+		<div :class="$style.titleGroup">
+			<div :class="$style.header">
+				<N8nText tag="h3" :bold="true">{{ i18n.baseText('agents.builder.memory.title') }}</N8nText>
+				<N8nSwitch
+					:model-value="memory !== null"
+					:disabled="props.disabled"
+					data-testid="agent-memory-toggle"
+					@update:model-value="onMemoryToggle"
+				/>
+			</div>
+			<N8nText size="small" color="text-light">
+				{{ i18n.baseText('agents.builder.memory.description') }}
+			</N8nText>
 		</div>
 
 		<!-- Configured + enabled state -->
@@ -108,6 +113,12 @@ function onMemoryToggle(enabled: boolean) {
 	overflow-y: auto;
 }
 
+.titleGroup {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing--3xs);
+}
+
 .header {
 	display: flex;
 	align-items: center;
@@ -115,8 +126,8 @@ function onMemoryToggle(enabled: boolean) {
 	gap: var(--spacing--sm);
 }
 
-/* Scoped overlay — header stays interactive so the heading and toggle can render. */
-.container.disabled > :not(.header) {
+/* Scoped overlay — title group stays interactive so the heading and toggle can render. */
+.container.disabled > :not(.titleGroup) {
 	pointer-events: none;
 	opacity: 0.6;
 }

@@ -66,11 +66,6 @@ const i18n = useI18n();
 						:description="executionsDescription"
 					/>
 					<AgentPanelHeader
-						v-else-if="activeMainTab === 'memory'"
-						:title="i18n.baseText('agents.builder.header.tab.memory')"
-						:description="i18n.baseText('agents.builder.memoryView.description')"
-					/>
-					<AgentPanelHeader
 						v-else-if="activeMainTab === 'raw'"
 						:title="i18n.baseText('agents.builder.header.tab.raw')"
 						:description="i18n.baseText('agents.builder.raw.description')"
@@ -119,6 +114,17 @@ const i18n = useI18n();
 					</N8nCard>
 
 					<N8nCard variant="outlined" :class="$style.card">
+						<AgentMemoryView
+							:config="localConfig"
+							:project-id="projectId"
+							:agent-id="agentId"
+							:disabled="isBuildChatStreaming"
+							data-testid="agent-memory-panel"
+							@update:config="emit('update:config', $event)"
+						/>
+					</N8nCard>
+
+					<N8nCard variant="outlined" :class="$style.card">
 						<AgentMemoryPanel
 							:config="localConfig"
 							:disabled="isBuildChatStreaming"
@@ -140,16 +146,6 @@ const i18n = useI18n();
 				<AgentSessionsListView
 					v-else-if="activeMainTab === 'executions'"
 					data-testid="agent-executions-panel"
-				/>
-
-				<AgentMemoryView
-					v-else-if="activeMainTab === 'memory'"
-					:config="localConfig"
-					:project-id="projectId"
-					:agent-id="agentId"
-					:disabled="isBuildChatStreaming"
-					data-testid="agent-memory-panel"
-					@update:config="emit('update:config', $event)"
 				/>
 
 				<div v-else-if="activeMainTab === 'raw'" :class="$style.rawPanel">

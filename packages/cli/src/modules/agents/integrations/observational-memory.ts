@@ -87,9 +87,16 @@ Drop:
   - Restatements of context already obvious from the conversation.
   - Patterns that occurred only once and aren't recurring.
 
-Bullet-point style, plain text, no markdown fences. Keep it short — three
-to six bullets is normal. If nothing durable has emerged yet, return an
-empty string.`;
+Output a markdown bulleted list. Each bullet on its own line, starting
+with "- " (hyphen, space). No fences, no headers, no preamble — only the
+list. Three to six bullets is normal. If nothing durable has emerged yet,
+return an empty string.
+
+Example output:
+
+- prefers terse direct answers over exploratory back-and-forth
+- consistently switches context after long pauses
+- gets frustrated when output includes process commentary`;
 
 const SUMMARY_KIND = 'summary';
 

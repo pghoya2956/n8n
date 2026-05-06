@@ -1,18 +1,31 @@
 <script setup lang="ts">
-import { N8nButton, N8nCard, N8nSwitch, N8nText, N8nTooltip } from '@n8n/design-system';
+import { N8nSwitch, N8nText } from '@n8n/design-system';
 import { useI18n } from '@n8n/i18n';
 import { useRootStore } from '@n8n/stores/useRootStore';
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import { getAgentMemory, type AgentMemoryReadResponse } from '../composables/useAgentThreadsApi';
 import type { AgentJsonConfig } from '../types';
+import AgentMiniEditor from '../components/AgentMiniEditor.vue';
 
-const props = defineProps<{
-	config: AgentJsonConfig | null;
-	projectId: string;
-	agentId: string;
-	disabled?: boolean;
-}>();
+/**
+ * How often to poll the rolling summary while the panel is mounted and
+ * observational memory is enabled. Memory only changes after an observe/compact
+ * cycle (post-turn), so a few seconds of latency is fine.
+ */
+const REFRESH_INTERVAL_MS = 5000;
+
+const props = withDefaults(
+	defineProps<{
+		config: AgentJsonConfig | null;
+		projectId: string;
+		agentId: string;
+		disabled?: boolean;
+	}>(),
+	{
+		disabled: false,
+	},
+);
 
 const emit = defineEmits<{ 'update:config': [changes: Partial<AgentJsonConfig>] }>();
 
@@ -21,7 +34,6 @@ const rootStore = useRootStore();
 
 const memoryData = ref<AgentMemoryReadResponse | null>(null);
 const loading = ref(false);
-const copied = ref(false);
 
 const observationalEnabled = computed(
 	() => props.config?.memory?.observationalMemory?.enabled === true,
@@ -29,6 +41,7 @@ const observationalEnabled = computed(
 const sessionMemoryEnabled = computed(() => props.config?.memory?.enabled === true);
 
 async function loadMemory() {
+	if (loading.value) return;
 	loading.value = true;
 	try {
 		memoryData.value = await getAgentMemory(
@@ -38,6 +51,24 @@ async function loadMemory() {
 		);
 	} finally {
 		loading.value = false;
+	}
+}
+
+let refreshHandle: ReturnType<typeof setInterval> | null = null;
+
+function startAutoRefresh() {
+	stopAutoRefresh();
+	refreshHandle = setInterval(() => {
+		if (document.visibilityState !== 'visible') return;
+		if (!observationalEnabled.value) return;
+		void loadMemory();
+	}, REFRESH_INTERVAL_MS);
+}
+
+function stopAutoRefresh() {
+	if (refreshHandle !== null) {
+		clearInterval(refreshHandle);
+		refreshHandle = null;
 	}
 }
 
@@ -52,15 +83,6 @@ function onToggle(enabled: boolean) {
 			},
 		},
 	});
-}
-
-async function copySummary() {
-	if (!memoryData.value?.summary) return;
-	await navigator.clipboard.writeText(memoryData.value.summary);
-	copied.value = true;
-	setTimeout(() => {
-		copied.value = false;
-	}, 1500);
 }
 
 const formattedUpdatedAt = computed(() => {
@@ -79,28 +101,39 @@ const emptyStateText = computed(() => {
 watch(
 	() => [props.projectId, props.agentId, observationalEnabled.value],
 	() => {
-		if (observationalEnabled.value) void loadMemory();
-		else memoryData.value = null;
+		if (observationalEnabled.value) {
+			void loadMemory();
+			startAutoRefresh();
+		} else {
+			memoryData.value = null;
+			stopAutoRefresh();
+		}
 	},
 );
 
 onMounted(() => {
-	if (observationalEnabled.value) void loadMemory();
+	if (observationalEnabled.value) {
+		void loadMemory();
+		startAutoRefresh();
+	}
+});
+
+onBeforeUnmount(() => {
+	stopAutoRefresh();
 });
 </script>
 
 <template>
-	<div :class="$style.container" data-testid="agent-memory-view">
-		<N8nCard variant="outlined" :class="$style.card">
-			<div :class="$style.toggleRow">
-				<div :class="$style.labelGroup">
-					<N8nText tag="span" size="small" :bold="true">{{
-						i18n.baseText('agents.builder.memoryView.toggle.label')
-					}}</N8nText>
-					<N8nText size="xsmall" color="text-light">{{
-						i18n.baseText('agents.builder.memoryView.toggle.hint')
-					}}</N8nText>
-				</div>
+	<div
+		:class="[$style.container, props.disabled && $style.disabled]"
+		:inert="props.disabled || undefined"
+		data-testid="agent-memory-view"
+	>
+		<div :class="$style.titleGroup">
+			<div :class="$style.header">
+				<N8nText tag="h3" :bold="true">{{
+					i18n.baseText('agents.builder.memoryView.title')
+				}}</N8nText>
 				<N8nSwitch
 					:model-value="observationalEnabled"
 					:disabled="disabled || !sessionMemoryEnabled"
@@ -108,22 +141,35 @@ onMounted(() => {
 					@update:model-value="onToggle"
 				/>
 			</div>
-		</N8nCard>
+			<N8nText size="small" color="text-light">
+				{{ i18n.baseText('agents.builder.memoryView.description') }}
+			</N8nText>
+		</div>
 
-		<N8nText size="small" color="text-light" :class="$style.description">
-			{{ i18n.baseText('agents.builder.memoryView.description') }}
-		</N8nText>
-
-		<div v-if="memoryData?.summary" :class="$style.summarySection">
-			<div :class="$style.summaryHeader">
-				<N8nText tag="span" size="small" :bold="true">{{
-					i18n.baseText('agents.builder.memoryView.summary.title')
-				}}</N8nText>
-				<div :class="$style.metaRow">
+		<template v-if="observationalEnabled">
+			<div v-if="memoryData?.summary" :class="$style.summarySection">
+				<AgentMiniEditor
+					:model-value="memoryData.summary"
+					language="markdown"
+					readonly
+					min-height="120px"
+					max-height="320px"
+					data-testid="agent-memory-summary"
+				/>
+				<div :class="$style.metaFooter">
+					<N8nText v-if="memoryData.observationCount > 0" size="xsmall" color="text-light">
+						{{
+							i18n.baseText('agents.builder.memoryView.summary.observationsQueued', {
+								adjustToNumber: memoryData.observationCount,
+								interpolate: { count: String(memoryData.observationCount) },
+							})
+						}}
+					</N8nText>
 					<N8nText
 						v-if="formattedUpdatedAt"
 						size="xsmall"
 						color="text-light"
+						:class="$style.metaUpdated"
 						data-testid="agent-memory-updated"
 					>
 						{{
@@ -132,50 +178,13 @@ onMounted(() => {
 							})
 						}}
 					</N8nText>
-					<N8nTooltip
-						:content="
-							copied
-								? i18n.baseText('agents.builder.addTrigger.copied')
-								: i18n.baseText('agents.builder.addTrigger.copy')
-						"
-					>
-						<N8nButton
-							variant="outline"
-							size="small"
-							icon-only
-							:icon="copied ? 'check' : 'copy'"
-							:aria-label="
-								copied
-									? i18n.baseText('agents.builder.addTrigger.copied')
-									: i18n.baseText('agents.builder.addTrigger.copy')
-							"
-							data-testid="agent-memory-summary-copy"
-							@click="copySummary"
-						/>
-					</N8nTooltip>
 				</div>
 			</div>
-			<pre :class="$style.summaryBlock" data-testid="agent-memory-summary">{{
-				memoryData.summary
-			}}</pre>
-			<N8nText
-				v-if="memoryData.observationCount > 0"
-				size="xsmall"
-				color="text-light"
-				:class="$style.queuedNote"
-			>
-				{{
-					i18n.baseText('agents.builder.memoryView.summary.observationsQueued', {
-						adjustToNumber: memoryData.observationCount,
-						interpolate: { count: String(memoryData.observationCount) },
-					})
-				}}
-			</N8nText>
-		</div>
 
-		<div v-else-if="!loading" :class="$style.emptyState" data-testid="agent-memory-empty">
-			<N8nText size="small" color="text-light">{{ emptyStateText }}</N8nText>
-		</div>
+			<div v-else-if="!loading" :class="$style.emptyState" data-testid="agent-memory-empty">
+				<N8nText size="small" color="text-light">{{ emptyStateText }}</N8nText>
+			</div>
+		</template>
 	</div>
 </template>
 
@@ -183,37 +192,27 @@ onMounted(() => {
 .container {
 	display: flex;
 	flex-direction: column;
-	gap: var(--spacing--lg);
-	padding: var(--spacing--lg);
+	gap: var(--spacing--sm);
 	width: 100%;
-	max-width: 56rem;
-	margin: 0 auto;
 }
 
-.card {
+.titleGroup {
 	display: flex;
 	flex-direction: column;
-	width: 100%;
+	gap: var(--spacing--3xs);
 }
 
-.toggleRow {
+.header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: var(--spacing--sm);
-	min-height: var(--spacing--xl);
 }
 
-.labelGroup {
-	display: flex;
-	flex-direction: column;
-	gap: var(--spacing--5xs);
-	flex: 1;
-	min-width: 0;
-}
-
-.description {
-	padding: 0 var(--spacing--3xs);
+/* Mirrors AgentMemoryPanel: title group stays interactive while body is dimmed when disabled. */
+.container.disabled > :not(.titleGroup) {
+	pointer-events: none;
+	opacity: 0.6;
 }
 
 .summarySection {
@@ -222,34 +221,16 @@ onMounted(() => {
 	gap: var(--spacing--2xs);
 }
 
-.summaryHeader {
+.metaFooter {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: var(--spacing--sm);
+	padding: 0 var(--spacing--3xs);
 }
 
-.metaRow {
-	display: flex;
-	align-items: center;
-	gap: var(--spacing--xs);
-}
-
-.summaryBlock {
-	margin: 0;
-	padding: var(--spacing--sm);
-	background-color: var(--color--background--light-2);
-	border: var(--border);
-	border-radius: var(--radius);
-	font-family: var(--font-family-monospace);
-	font-size: var(--font-size--sm);
-	white-space: pre-wrap;
-	word-break: break-word;
-	line-height: var(--font-line-height--regular);
-}
-
-.queuedNote {
-	padding-left: var(--spacing--3xs);
+.metaUpdated {
+	margin-left: auto;
 }
 
 .emptyState {
