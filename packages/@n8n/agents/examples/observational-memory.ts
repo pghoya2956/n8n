@@ -108,7 +108,6 @@ const observe: ObserveFn = async (ctx) => {
 				durationMs: typeof parsed.durationMs === 'number' ? parsed.durationMs : null,
 				schemaVersion: OBSERVATION_SCHEMA_VERSION,
 				createdAt: now,
-				compactedAt: null,
 			});
 		} catch {
 			// skip malformed lines
@@ -154,7 +153,6 @@ const compact: CompactFn = async (ctx) => {
 			durationMs: null,
 			schemaVersion: OBSERVATION_SCHEMA_VERSION,
 			createdAt: new Date(),
-			compactedAt: null,
 		},
 	};
 };

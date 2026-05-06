@@ -32,7 +32,6 @@ describe('Memory builder — observational memory', () => {
 				durationMs: null,
 				schemaVersion: OBSERVATION_SCHEMA_VERSION,
 				createdAt: new Date(),
-				compactedAt: null,
 			},
 		});
 		const config = new Memory()

@@ -2552,7 +2552,6 @@ describe('AgentRuntime — observational memory read path', () => {
 				durationMs: null,
 				schemaVersion: 1,
 				createdAt: new Date(),
-				compactedAt: null,
 			},
 			{
 				scopeKind: 'thread',
@@ -2562,7 +2561,6 @@ describe('AgentRuntime — observational memory read path', () => {
 				durationMs: null,
 				schemaVersion: 1,
 				createdAt: new Date(),
-				compactedAt: null,
 			},
 		]);
 
@@ -2612,7 +2610,6 @@ describe('AgentRuntime — observational memory read path', () => {
 				durationMs: null,
 				schemaVersion: 1,
 				createdAt: new Date(),
-				compactedAt: null,
 			},
 		]);
 
@@ -2672,7 +2669,6 @@ describe('AgentRuntime — observational lazy fallback at TurnStart', () => {
 				durationMs: null,
 				schemaVersion: 1,
 				createdAt: new Date(),
-				compactedAt: null,
 			},
 		]);
 

@@ -118,7 +118,6 @@ const observe: ObserveFn = async (ctx) => {
 				durationMs: typeof parsed.durationMs === 'number' ? parsed.durationMs : null,
 				schemaVersion: OBSERVATION_SCHEMA_VERSION,
 				createdAt: now,
-				compactedAt: null,
 			});
 		} catch {
 			// skip malformed lines
@@ -174,7 +173,6 @@ const compact: CompactFn = async (ctx) => {
 			durationMs: null,
 			schemaVersion: OBSERVATION_SCHEMA_VERSION,
 			createdAt: new Date(),
-			compactedAt: null,
 		},
 	};
 };
@@ -240,14 +238,11 @@ function previewObservations(rows: Observation[]): void {
 	const summaries = rows.filter((r) => r.kind === 'summary');
 	const others = rows.filter((r) => r.kind !== 'summary');
 	console.log(
-		`  totals: ${rows.length} rows (${summaries.length} summaries, ${others.length} others, ${
-			rows.filter((r) => r.compactedAt !== null).length
-		} compacted)`,
+		`  totals: ${rows.length} rows (${summaries.length} summaries, ${others.length} others)`,
 	);
 	for (const r of rows) {
-		const flag = r.compactedAt ? '∅' : '·';
 		const text = typeof r.payload === 'string' ? r.payload : JSON.stringify(r.payload);
-		console.log(`  ${flag} [seq=${r.seq} ${r.kind}] ${text.slice(0, 100)}`);
+		console.log(`  · [${r.kind}] ${text.slice(0, 100)}`);
 	}
 }
 

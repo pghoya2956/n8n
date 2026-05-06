@@ -36,7 +36,6 @@ export async function loadObservationalMemoryContext(
 		scopeKind,
 		scopeId,
 		schemaVersionAtMost: OBSERVATION_SCHEMA_VERSION,
-		onlyUncompacted: true,
 	});
 
 	if (summaryText === null && recentObservations.length === 0) return null;

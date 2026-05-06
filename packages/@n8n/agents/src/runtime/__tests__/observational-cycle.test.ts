@@ -28,7 +28,7 @@ function makeNewObs(overrides: Partial<NewObservation> = {}): NewObservation {
 		durationMs: null,
 		schemaVersion: OBSERVATION_SCHEMA_VERSION,
 		createdAt: new Date('2026-05-05T00:00:00Z'),
-		compactedAt: null,
+
 		...overrides,
 	};
 }
@@ -223,16 +223,9 @@ describe('runObservationalCycle', () => {
 		expect(cursor?.summary).toBe('compacted summary');
 		expect(cursor?.summaryUpdatedAt).toBeInstanceOf(Date);
 
-		const allObs = await store.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
-		expect(allObs.every((r) => r.kind === 'observation')).toBe(true);
-
-		// All input observations got flagged as compacted.
-		const uncompacted = await store.getObservations({
-			scopeKind: 'thread',
-			scopeId: 't-1',
-			onlyUncompacted: true,
-		});
-		expect(uncompacted).toHaveLength(0);
+		// All input observations got hard-deleted from the table.
+		const remaining = await store.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
+		expect(remaining).toHaveLength(0);
 	});
 
 	it('compacting a second time replaces the rolling summary on the cursor', async () => {

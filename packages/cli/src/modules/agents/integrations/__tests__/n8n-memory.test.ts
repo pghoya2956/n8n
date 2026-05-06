@@ -1,5 +1,5 @@
 import { OBSERVATION_SCHEMA_VERSION, type NewObservation } from '@n8n/agents';
-import { Equal, In, IsNull, LessThan, LessThanOrEqual, MoreThan } from '@n8n/typeorm';
+import { Equal, In, LessThan, LessThanOrEqual, MoreThan } from '@n8n/typeorm';
 import { mock } from 'jest-mock-extended';
 
 import type { AgentMessageEntity } from '../../entities/agent-message.entity';
@@ -337,7 +337,6 @@ describe('N8nMemory', () => {
 			durationMs: null,
 			schemaVersion: OBSERVATION_SCHEMA_VERSION,
 			createdAt: new Date('2026-05-05T00:00:00Z'),
-			compactedAt: null,
 			...overrides,
 		};
 	}
@@ -384,7 +383,6 @@ describe('N8nMemory', () => {
 				scopeId: 't-1',
 				since: { sinceCreatedAt, sinceObservationId: 'obs-anchor' },
 				kindIs: 'summary',
-				onlyUncompacted: true,
 				schemaVersionAtMost: 1,
 				limit: 10,
 			});
@@ -395,7 +393,6 @@ describe('N8nMemory', () => {
 						scopeKind: 'resource',
 						scopeId: 't-1',
 						kind: 'summary',
-						compactedAt: IsNull(),
 						schemaVersion: LessThanOrEqual(1),
 						createdAt: MoreThan(sinceCreatedAt),
 					},
@@ -403,7 +400,6 @@ describe('N8nMemory', () => {
 						scopeKind: 'resource',
 						scopeId: 't-1',
 						kind: 'summary',
-						compactedAt: IsNull(),
 						schemaVersion: LessThanOrEqual(1),
 						createdAt: Equal(sinceCreatedAt),
 						id: MoreThan('obs-anchor'),
@@ -435,7 +431,6 @@ describe('N8nMemory', () => {
 					schemaVersion: '1' as unknown as number,
 					createdAt: new Date('2026-05-05T00:00:00Z'),
 					updatedAt: new Date('2026-05-05T00:00:00Z'),
-					compactedAt: null,
 				} as AgentObservationEntity,
 			]);
 
@@ -445,20 +440,15 @@ describe('N8nMemory', () => {
 		});
 	});
 
-	describe('markObservationsCompacted', () => {
-		it('issues a single update only over uncompacted ids', async () => {
-			const at = new Date('2026-05-05T01:00:00Z');
-			await memory.markObservationsCompacted(['a', 'b'], at);
-
-			expect(observationRepository.update).toHaveBeenCalledWith(
-				{ id: In(['a', 'b']), compactedAt: IsNull() },
-				{ compactedAt: at },
-			);
+	describe('deleteObservations', () => {
+		it('issues a single delete over the given ids', async () => {
+			await memory.deleteObservations(['a', 'b']);
+			expect(observationRepository.delete).toHaveBeenCalledWith({ id: In(['a', 'b']) });
 		});
 
 		it('no-ops on empty input', async () => {
-			await memory.markObservationsCompacted([], new Date());
-			expect(observationRepository.update).not.toHaveBeenCalled();
+			await memory.deleteObservations([]);
+			expect(observationRepository.delete).not.toHaveBeenCalled();
 		});
 	});
 

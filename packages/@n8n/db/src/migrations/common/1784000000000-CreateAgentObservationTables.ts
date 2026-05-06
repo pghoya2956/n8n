@@ -3,9 +3,10 @@ import type { MigrationContext, ReversibleMigration } from '../migration-types';
 /**
  * Creates the three sibling tables for observational memory:
  *
- * - `agents_observations`: append-only observation log keyed by `(scopeKind,
- *   scopeId)` and ordered by `(createdAt, id)`. Consumers define `kind`;
- *   payload is JSON. `compactedAt` is a soft-flag set by the compactor.
+ * - `agents_observations`: observation log keyed by `(scopeKind, scopeId)`
+ *   and ordered by `(createdAt, id)`. Consumers define `kind`; payload is
+ *   JSON. Rows are hard-deleted by the compactor when folded into the
+ *   rolling summary, so the table stays bounded.
  * - `agents_observation_cursors`: per-scope mutable state. Two distinct
  *   responsibilities live on this row:
  *     - `(lastObservedAt, lastObservedMessageId)` — the keyset cursor that
@@ -32,7 +33,6 @@ export class CreateAgentObservationTables1784000000000 implements ReversibleMigr
 				column('payload').json.notNull,
 				column('durationMs').bigint,
 				column('schemaVersion').int.notNull,
-				column('compactedAt').timestamp(3),
 			)
 			.withIndexOn(['scopeKind', 'scopeId', 'kind', 'createdAt']).withTimestamps;
 

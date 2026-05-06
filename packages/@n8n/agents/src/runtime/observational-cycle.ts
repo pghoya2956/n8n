@@ -140,7 +140,6 @@ async function maybeCompact(
 	const inputs = await memory.getObservations({
 		scopeKind,
 		scopeId,
-		onlyUncompacted: true,
 	});
 	if (inputs.length === 0) return false;
 	if (
@@ -172,10 +171,7 @@ async function maybeCompact(
 			? result.summary.payload
 			: renderPayload(result.summary.payload);
 	await memory.setRollingSummary(scopeKind, scopeId, summaryText, now);
-	await memory.markObservationsCompacted(
-		inputs.map((r) => r.id),
-		now,
-	);
+	await memory.deleteObservations(inputs.map((r) => r.id));
 	emitCompactionRan(eventBus, scopeKind, scopeId, inputs.length, result.summary.payload);
 	return true;
 }

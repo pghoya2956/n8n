@@ -337,19 +337,20 @@ export class AgentExecutionService {
 		// The rolling summary lives on the cursor row (see foundation migration's
 		// agents_observation_cursors.summary column). One row per scope; no
 		// ordering or kind filter needed.
-		const [cursor, uncompacted] = await Promise.all([
+		// Hard-delete on compact means every row in the table is by definition
+		// part of the in-flight queue (compacted rows are deleted, not flagged).
+		const [cursor, queued] = await Promise.all([
 			this.n8nMemory.getCursor('resource', scopeId),
 			this.n8nMemory.getObservations({
 				scopeKind: 'resource',
 				scopeId,
-				onlyUncompacted: true,
 			}),
 		]);
 
 		return {
 			summary: cursor?.summary ?? null,
 			summaryUpdatedAt: cursor?.summaryUpdatedAt?.toISOString() ?? null,
-			observationCount: uncompacted.length,
+			observationCount: queued.length,
 		};
 	}
 

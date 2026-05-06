@@ -13,7 +13,7 @@ import type {
 } from '@n8n/agents';
 import { Service } from '@n8n/di';
 import type { FindOptionsWhere } from '@n8n/typeorm';
-import { Equal, In, IsNull, LessThan, LessThanOrEqual, Like, MoreThan } from '@n8n/typeorm';
+import { Equal, In, LessThan, LessThanOrEqual, Like, MoreThan } from '@n8n/typeorm';
 import type { QueryDeepPartialEntity } from '@n8n/typeorm/query-builder/QueryPartialEntity';
 import { UnexpectedError } from 'n8n-workflow';
 
@@ -227,7 +227,6 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 				payload: row.payload,
 				durationMs: row.durationMs,
 				schemaVersion: row.schemaVersion,
-				compactedAt: row.compactedAt,
 				createdAt: row.createdAt,
 			}),
 		);
@@ -243,13 +242,11 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 		kindIs?: string;
 		limit?: number;
 		schemaVersionAtMost?: number;
-		onlyUncompacted?: boolean;
 	}): Promise<Observation[]> {
 		const baseWhere: FindOptionsWhere<AgentObservationEntity> = {
 			scopeKind: opts.scopeKind,
 			scopeId: opts.scopeId,
 			...(opts.kindIs !== undefined && { kind: opts.kindIs }),
-			...(opts.onlyUncompacted && { compactedAt: IsNull() }),
 			...(opts.schemaVersionAtMost !== undefined && {
 				schemaVersion: LessThanOrEqual(opts.schemaVersionAtMost),
 			}),
@@ -272,12 +269,9 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 		return entities.map((e) => this.toObservation(e));
 	}
 
-	async markObservationsCompacted(ids: string[], compactedAt: Date): Promise<void> {
+	async deleteObservations(ids: string[]): Promise<void> {
 		if (ids.length === 0) return;
-		await this.observationRepository.update(
-			{ id: In(ids), compactedAt: IsNull() },
-			{ compactedAt },
-		);
+		await this.observationRepository.delete({ id: In(ids) });
 	}
 
 	async getMessagesForScope(
@@ -318,10 +312,10 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 			.andWhere('m.resourceId = :resourceId', { resourceId });
 
 		if (opts?.since) {
-			qb.andWhere(
-				'(m.createdAt > :sinceAt OR (m.createdAt = :sinceAt AND m.id > :sinceId))',
-				{ sinceAt: opts.since.sinceCreatedAt, sinceId: opts.since.sinceMessageId },
-			);
+			qb.andWhere('(m.createdAt > :sinceAt OR (m.createdAt = :sinceAt AND m.id > :sinceId))', {
+				sinceAt: opts.since.sinceCreatedAt,
+				sinceId: opts.since.sinceMessageId,
+			});
 		}
 
 		const entities = await qb.orderBy('m.createdAt', 'ASC').addOrderBy('m.id', 'ASC').getMany();
@@ -446,7 +440,6 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 			durationMs: entity.durationMs === null ? null : Number(entity.durationMs),
 			schemaVersion: Number(entity.schemaVersion),
 			createdAt: entity.createdAt,
-			compactedAt: entity.compactedAt,
 		};
 	}
 

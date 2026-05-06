@@ -15,7 +15,7 @@ function obs(overrides: Partial<NewObservation> = {}): NewObservation {
 		durationMs: null,
 		schemaVersion: OBSERVATION_SCHEMA_VERSION,
 		createdAt: new Date('2026-05-05T00:00:00Z'),
-		compactedAt: null,
+
 		...overrides,
 	};
 }
@@ -57,17 +57,17 @@ describe('loadObservationalMemoryContext', () => {
 		expect(ctx?.renderedSection).toContain('post-summary two');
 	});
 
-	it('skips compacted observations', async () => {
+	it('only sees observations that are still in the table after a compaction', async () => {
 		const store = new InMemoryMemory();
 		const persisted = await store.appendObservations([
-			obs({ payload: 'will be compacted' }),
+			obs({ payload: 'will be deleted' }),
 			obs({ payload: 'fresh' }),
 		]);
-		await store.markObservationsCompacted([persisted[0].id], new Date());
+		await store.deleteObservations([persisted[0].id]);
 
 		const ctx = await loadObservationalMemoryContext(store, {}, 'thread', 't-1');
 		expect(ctx?.renderedSection).toContain('fresh');
-		expect(ctx?.renderedSection).not.toContain('will be compacted');
+		expect(ctx?.renderedSection).not.toContain('will be deleted');
 	});
 
 	it('flags isStale to the formatter when the summary is older than the threshold', async () => {

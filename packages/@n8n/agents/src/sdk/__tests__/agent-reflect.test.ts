@@ -35,7 +35,6 @@ function makeNewObs(payload: string): NewObservation {
 		durationMs: null,
 		schemaVersion: OBSERVATION_SCHEMA_VERSION,
 		createdAt: new Date(),
-		compactedAt: null,
 	};
 }
 

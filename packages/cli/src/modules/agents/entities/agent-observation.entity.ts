@@ -1,4 +1,4 @@
-import { DateTimeColumn, JsonColumn, WithTimestampsAndStringId } from '@n8n/db';
+import { JsonColumn, WithTimestampsAndStringId } from '@n8n/db';
 import { Column, Entity, Index } from '@n8n/typeorm';
 
 export type ObservationScopeKind = 'thread' | 'resource' | 'agent';
@@ -23,7 +23,4 @@ export class AgentObservationEntity extends WithTimestampsAndStringId {
 
 	@Column({ type: 'int' })
 	schemaVersion: number;
-
-	@DateTimeColumn({ nullable: true })
-	compactedAt: Date | null;
 }

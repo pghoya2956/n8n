@@ -28,8 +28,6 @@ export interface Observation {
 	durationMs: number | null;
 	schemaVersion: number;
 	createdAt: Date;
-	/** Soft-flag set by the compactor; `null` until then. */
-	compactedAt: Date | null;
 }
 
 /** Shape passed to `appendObservations`. `id` is backend-assigned. */
@@ -117,18 +115,16 @@ export type FormatContextFn = (ctx: {
 export interface BuiltObservationStore {
 	/**
 	 * Append observation rows for a scope. Backends assign `id` and return the
-	 * persisted shape. Append-only; rows are not mutated after insert except
-	 * via {@link BuiltObservationStore.markObservationsCompacted}.
+	 * persisted shape.
 	 */
 	appendObservations(rows: NewObservation[]): Promise<Observation[]>;
 	/**
 	 * Query observations for a scope. Filters compose: `since`, when supplied,
 	 * returns only rows strictly after the keyset `(createdAt, id) >
 	 * (since.sinceCreatedAt, since.sinceObservationId)`; `kindIs` matches
-	 * `kind` exactly; `onlyUncompacted` excludes rows with `compactedAt` set;
-	 * `schemaVersionAtMost` excludes rows whose `schemaVersion` exceeds the
-	 * caller's supported version. Results are ordered by `(createdAt, id)`
-	 * ascending.
+	 * `kind` exactly; `schemaVersionAtMost` excludes rows whose `schemaVersion`
+	 * exceeds the caller's supported version. Results are ordered by
+	 * `(createdAt, id)` ascending.
 	 */
 	getObservations(opts: {
 		scopeKind: ScopeKind;
@@ -137,7 +133,6 @@ export interface BuiltObservationStore {
 		kindIs?: string;
 		limit?: number;
 		schemaVersionAtMost?: number;
-		onlyUncompacted?: boolean;
 	}): Promise<Observation[]>;
 	/**
 	 * Read the message delta the observer needs to process for a given scope.
@@ -157,8 +152,8 @@ export interface BuiltObservationStore {
 		scopeId: string,
 		opts?: { since?: { sinceCreatedAt: Date; sinceMessageId: string } },
 	): Promise<AgentDbMessage[]>;
-	/** Soft-flag the given rows as compacted; idempotent. */
-	markObservationsCompacted(ids: string[], compactedAt: Date): Promise<void>;
+	/** Hard-delete the given rows. Idempotent: missing ids are ignored. */
+	deleteObservations(ids: string[]): Promise<void>;
 	/** Read the cursor for a scope; `null` if none has been written yet. */
 	getCursor(scopeKind: ScopeKind, scopeId: string): Promise<ObservationCursor | null>;
 	/**

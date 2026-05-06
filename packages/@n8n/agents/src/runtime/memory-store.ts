@@ -197,7 +197,6 @@ export class InMemoryMemory implements BuiltMemory, BuiltObservationStore {
 		kindIs?: string;
 		limit?: number;
 		schemaVersionAtMost?: number;
-		onlyUncompacted?: boolean;
 	}): Promise<Observation[]> {
 		const bucket = this.observationsByScope.get(scopeKey(opts.scopeKind, opts.scopeId)) ?? [];
 		let rows = [...bucket].sort((a, b) =>
@@ -216,9 +215,6 @@ export class InMemoryMemory implements BuiltMemory, BuiltObservationStore {
 		if (opts.kindIs !== undefined) {
 			const kind = opts.kindIs;
 			rows = rows.filter((r) => r.kind === kind);
-		}
-		if (opts.onlyUncompacted) {
-			rows = rows.filter((r) => r.compactedAt === null);
 		}
 		if (opts.schemaVersionAtMost !== undefined) {
 			const max = opts.schemaVersionAtMost;
@@ -270,14 +266,14 @@ export class InMemoryMemory implements BuiltMemory, BuiltObservationStore {
 	}
 
 	// eslint-disable-next-line @typescript-eslint/require-await
-	async markObservationsCompacted(ids: string[], compactedAt: Date): Promise<void> {
+	async deleteObservations(ids: string[]): Promise<void> {
+		if (ids.length === 0) return;
 		const idSet = new Set(ids);
-		for (const bucket of this.observationsByScope.values()) {
-			for (const row of bucket) {
-				if (idSet.has(row.id) && row.compactedAt === null) {
-					row.compactedAt = compactedAt;
-				}
-			}
+		for (const [key, bucket] of this.observationsByScope.entries()) {
+			this.observationsByScope.set(
+				key,
+				bucket.filter((row) => !idSet.has(row.id)),
+			);
 		}
 	}
 

@@ -14,7 +14,6 @@ function makeRow(overrides: Partial<NewObservation> = {}): NewObservation {
 		durationMs: null,
 		schemaVersion: OBSERVATION_SCHEMA_VERSION,
 		createdAt: new Date(),
-		compactedAt: null,
 		...overrides,
 	};
 }
@@ -41,10 +40,10 @@ describe('InMemoryMemory — observations', () => {
 		expect(rows.map((r) => r.payload)).toEqual(['first', 'second']);
 	});
 
-	it('filters by since (keyset), kindIs, onlyUncompacted, schemaVersionAtMost, limit', async () => {
+	it('filters by since (keyset), kindIs, schemaVersionAtMost, limit', async () => {
 		const mem = new InMemoryMemory();
 		const t = Date.now();
-		const [r1, r2, r3, r4] = await mem.appendObservations([
+		const [r1, , r3, r4] = await mem.appendObservations([
 			makeRow({ kind: 'observation', payload: 'one', createdAt: new Date(t) }),
 			makeRow({ kind: 'summary', payload: 'mid', createdAt: new Date(t + 1) }),
 			makeRow({
@@ -88,17 +87,6 @@ describe('InMemoryMemory — observations', () => {
 			),
 		).toEqual(['one', 'mid']);
 
-		await mem.markObservationsCompacted([r1.id, r2.id], new Date());
-		expect(
-			(
-				await mem.getObservations({
-					scopeKind: 'thread',
-					scopeId: 't-1',
-					onlyUncompacted: true,
-				})
-			).map((r) => r.payload),
-		).toEqual(['two', 'three']);
-
 		expect(r3.id).toBeDefined();
 		expect(r4.id).toBeDefined();
 	});
@@ -121,16 +109,19 @@ describe('InMemoryMemory — observations', () => {
 		expect(rows[0].id).toBe(high.id);
 	});
 
-	it('markObservationsCompacted is idempotent and ignores unknown ids', async () => {
+	it('deleteObservations removes the rows and ignores unknown ids', async () => {
 		const mem = new InMemoryMemory();
-		const [r1] = await mem.appendObservations([makeRow()]);
+		const [r1, r2] = await mem.appendObservations([makeRow(), makeRow()]);
 
-		const at = new Date();
-		await mem.markObservationsCompacted([r1.id, 'unknown-id'], at);
-		await mem.markObservationsCompacted([r1.id], at);
+		await mem.deleteObservations([r1.id, 'unknown-id']);
 
-		const [reread] = await mem.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
-		expect(reread.compactedAt?.getTime()).toBe(at.getTime());
+		const remaining = await mem.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
+		expect(remaining.map((r) => r.id)).toEqual([r2.id]);
+
+		// Deleting again is a no-op (idempotent).
+		await mem.deleteObservations([r1.id]);
+		const stillThere = await mem.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
+		expect(stillThere.map((r) => r.id)).toEqual([r2.id]);
 	});
 });
 

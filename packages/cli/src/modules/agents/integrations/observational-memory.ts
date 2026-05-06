@@ -176,7 +176,6 @@ export function createObservationalMemoryFunctions(
 					durationMs: typeof parsed.durationMs === 'number' ? parsed.durationMs : null,
 					schemaVersion: OBSERVATION_SCHEMA_VERSION,
 					createdAt: now,
-					compactedAt: null,
 				});
 			} catch {
 				logger.debug('Observer emitted malformed JSON line', { line: trimmed });
@@ -209,7 +208,6 @@ export function createObservationalMemoryFunctions(
 				durationMs: null,
 				schemaVersion: OBSERVATION_SCHEMA_VERSION,
 				createdAt: new Date(),
-				compactedAt: null,
 			},
 		};
 	};
