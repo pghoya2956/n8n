@@ -65,13 +65,20 @@ export interface ObservationLockHandle {
 /**
  * Consumer-provided observer function. Called inside the orchestrator's
  * lock + cursor scope; receives the message delta since the last cursor
- * advance and the current rolling summary, returns zero or more rows to
- * append.
+ * advance, the scope being observed, and the current rolling summary, then
+ * returns zero or more rows to append.
+ *
+ * `scopeKind` and `scopeId` are forwarded from the orchestrator opts so the
+ * consumer can stamp them onto the returned `NewObservation` rows without
+ * having to reach into `cursor` (which is `null` on the very first cycle for
+ * a scope).
  */
 export type ObserveFn = (ctx: {
 	deltaMessages: AgentDbMessage[];
 	currentSummary: string | null;
 	cursor: ObservationCursor | null;
+	scopeKind: ScopeKind;
+	scopeId: string;
 	telemetry: BuiltTelemetry | undefined;
 }) => Promise<NewObservation[]>;
 
@@ -215,11 +222,22 @@ export interface ObservationalMemoryConfig {
 	 */
 	getScope?: ResolveObservationalScope;
 	/**
-	 * When set together with `compact`, the orchestrator runs the compactor
-	 * after `observe` whenever the uncompacted row count for the scope is
-	 * `>=` this value.
+	 * Minimum number of queued (uncompacted) observations required before
+	 * the compactor can fire. When unset, the count gate is disabled.
 	 */
-	compactionRowThreshold?: number;
+	compactionMinObservations?: number;
+	/**
+	 * Minimum elapsed time (ms) since the last compaction before another
+	 * one can fire. When unset, the idle gate is disabled. The first
+	 * compaction always fires regardless (no prior `summaryUpdatedAt`).
+	 */
+	compactionIdleMs?: number;
+	/**
+	 * Burst override: when the queue grows to at least this many uncompacted
+	 * observations, fire compaction even if the idle window has not elapsed.
+	 * When unset, no burst override applies and the idle window is strict.
+	 */
+	compactionBurstThreshold?: number;
 	/**
 	 * When set, the formatter receives `isStale: true` once the rolling
 	 * summary's `updatedAt` is older than this many milliseconds. Absent
@@ -228,12 +246,6 @@ export interface ObservationalMemoryConfig {
 	stalenessThresholdMs?: number;
 	/** Consumer-provided formatter; absent means use the SDK's minimal default. */
 	formatContext?: FormatContextFn;
-	/**
-	 * Kind value the read-side helper uses to find the rolling summary row
-	 * for a scope.
-	 * @default 'summary'
-	 */
-	summaryKind?: string;
 	/**
 	 * TTL applied when the orchestrator acquires the per-scope observation
 	 * lock.
