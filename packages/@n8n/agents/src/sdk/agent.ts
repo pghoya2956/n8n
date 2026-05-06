@@ -12,6 +12,7 @@ import {
 	runObservationalCycle,
 	type RunObservationalCycleResult,
 } from '../runtime/observational-cycle';
+import { resolveObservationalScope } from '../runtime/observational-memory';
 import { createAgentToolResult } from '../runtime/tool-adapter';
 import type {
 	AgentEvent,
@@ -550,6 +551,7 @@ export class Agent implements BuiltAgent, AgentBuilder {
 	 */
 	async reflect(opts: {
 		threadId: string;
+		resourceId?: string;
 		observe?: ObserveFn;
 		compact?: CompactFn;
 	}): Promise<{ status: 'no-config' } | RunObservationalCycleResult> {
@@ -566,10 +568,14 @@ export class Agent implements BuiltAgent, AgentBuilder {
 		}
 		const runtime = await this.ensureBuilt();
 		const telemetry = runtime.getConfiguredTelemetry();
+		const { scopeKind, scopeId } = resolveObservationalScope(obsConfig, {
+			threadId: opts.threadId,
+			...(opts.resourceId !== undefined && { resourceId: opts.resourceId }),
+		});
 		return await runObservationalCycle({
 			memory: memory as BuiltMemory & BuiltObservationStore,
-			scopeKind: 'thread',
-			scopeId: opts.threadId,
+			scopeKind,
+			scopeId,
 			observe,
 			compact: opts.compact ?? obsConfig.compact,
 			...(obsConfig.compactionRowThreshold !== undefined && {

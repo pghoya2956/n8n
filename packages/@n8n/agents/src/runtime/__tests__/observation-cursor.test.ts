@@ -2,10 +2,14 @@ import type { AgentDbMessage, AgentMessage, Message } from '../../types/sdk/mess
 import { InMemoryMemory } from '../memory-store';
 import { advanceCursor, getDeltaSinceCursor } from '../observation-cursor';
 
-function makeMsg(role: 'user' | 'assistant', text: string): AgentDbMessage {
+function makeMsg(
+	role: 'user' | 'assistant',
+	text: string,
+	createdAt = new Date(),
+): AgentDbMessage {
 	return {
 		id: crypto.randomUUID(),
-		createdAt: new Date(),
+		createdAt,
 		role,
 		content: [{ type: 'text', text }],
 	};
@@ -19,11 +23,15 @@ function textOf(msg: AgentMessage): string {
 describe('getDeltaSinceCursor', () => {
 	it('returns the full thread history when no cursor exists', async () => {
 		const store = new InMemoryMemory();
+		const t = Date.now();
 		await store.saveThread({ id: 't-1', resourceId: 'u-1' });
 		await store.saveMessages({
 			threadId: 't-1',
 			resourceId: 'u-1',
-			messages: [makeMsg('user', 'one'), makeMsg('assistant', 'two')],
+			messages: [
+				makeMsg('user', 'one', new Date(t)),
+				makeMsg('assistant', 'two', new Date(t + 1)),
+			],
 		});
 
 		const { messages, cursor } = await getDeltaSinceCursor(store, 'thread', 't-1');
@@ -31,26 +39,30 @@ describe('getDeltaSinceCursor', () => {
 		expect(messages.map(textOf)).toEqual(['one', 'two']);
 	});
 
-	it('returns only messages strictly after the cursor seq', async () => {
+	it('returns only messages strictly after the cursor keyset', async () => {
 		const store = new InMemoryMemory();
+		const t = Date.now();
 		await store.saveThread({ id: 't-1', resourceId: 'u-1' });
 		await store.saveMessages({
 			threadId: 't-1',
 			resourceId: 'u-1',
-			messages: [makeMsg('user', 'one'), makeMsg('assistant', 'two')],
+			messages: [
+				makeMsg('user', 'one', new Date(t)),
+				makeMsg('assistant', 'two', new Date(t + 1)),
+			],
 		});
 		const [first] = await store.getMessages('t-1');
 		await store.setCursor({
 			scopeKind: 'thread',
 			scopeId: 't-1',
 			lastObservedMessageId: first.id,
-			lastObservedSeq: first.seq!,
+			lastObservedAt: first.createdAt,
 			updatedAt: new Date(),
 		});
 		await store.saveMessages({
 			threadId: 't-1',
 			resourceId: 'u-1',
-			messages: [makeMsg('user', 'three')],
+			messages: [makeMsg('user', 'three', new Date(t + 2))],
 		});
 
 		const { messages, cursor } = await getDeltaSinceCursor(store, 'thread', 't-1');
@@ -71,7 +83,7 @@ describe('getDeltaSinceCursor', () => {
 			scopeKind: 'thread',
 			scopeId: 't-1',
 			lastObservedMessageId: only.id,
-			lastObservedSeq: only.seq!,
+			lastObservedAt: only.createdAt,
 			updatedAt: new Date(),
 		});
 
@@ -81,24 +93,25 @@ describe('getDeltaSinceCursor', () => {
 
 	it('isolates cursors by scope', async () => {
 		const store = new InMemoryMemory();
+		const t = Date.now();
 		await store.saveThread({ id: 't-A', resourceId: 'u-1' });
 		await store.saveThread({ id: 't-B', resourceId: 'u-1' });
 		await store.saveMessages({
 			threadId: 't-A',
 			resourceId: 'u-1',
-			messages: [makeMsg('user', 'a-1'), makeMsg('user', 'a-2')],
+			messages: [makeMsg('user', 'a-1', new Date(t)), makeMsg('user', 'a-2', new Date(t + 1))],
 		});
 		await store.saveMessages({
 			threadId: 't-B',
 			resourceId: 'u-1',
-			messages: [makeMsg('user', 'b-1')],
+			messages: [makeMsg('user', 'b-1', new Date(t + 2))],
 		});
 		const aMessages = await store.getMessages('t-A');
 		await store.setCursor({
 			scopeKind: 'thread',
 			scopeId: 't-A',
 			lastObservedMessageId: aMessages[0].id,
-			lastObservedSeq: aMessages[0].seq!,
+			lastObservedAt: aMessages[0].createdAt,
 			updatedAt: new Date(),
 		});
 
@@ -113,7 +126,7 @@ describe('getDeltaSinceCursor', () => {
 });
 
 describe('advanceCursor', () => {
-	it('writes a cursor row matching the message id and seq', async () => {
+	it('writes a cursor row matching the message id and createdAt', async () => {
 		const store = new InMemoryMemory();
 		await store.saveThread({ id: 't-1', resourceId: 'u-1' });
 		await store.saveMessages({
@@ -125,10 +138,11 @@ describe('advanceCursor', () => {
 
 		const written = await advanceCursor(store, 'thread', 't-1', only);
 		expect(written.lastObservedMessageId).toBe(only.id);
-		expect(written.lastObservedSeq).toBe(only.seq);
+		expect(written.lastObservedAt.getTime()).toBe(only.createdAt.getTime());
 
 		const reread = await store.getCursor('thread', 't-1');
-		expect(reread?.lastObservedSeq).toBe(only.seq);
+		expect(reread?.lastObservedMessageId).toBe(only.id);
+		expect(reread?.lastObservedAt.getTime()).toBe(only.createdAt.getTime());
 	});
 
 	it('uses the provided `now` for updatedAt', async () => {
@@ -146,24 +160,17 @@ describe('advanceCursor', () => {
 		expect(cursor.updatedAt.getTime()).toBe(now.getTime());
 	});
 
-	it('throws when the message has no seq', async () => {
-		const store = new InMemoryMemory();
-		const msg: AgentDbMessage = {
-			id: 'no-seq',
-			createdAt: new Date(),
-			role: 'user',
-			content: [{ type: 'text', text: 'x' }],
-		};
-		await expect(advanceCursor(store, 'thread', 't-1', msg)).rejects.toThrow(/seq/);
-	});
-
 	it('overwrites a prior cursor (advance is upsert, not append)', async () => {
 		const store = new InMemoryMemory();
+		const t = Date.now();
 		await store.saveThread({ id: 't-1', resourceId: 'u-1' });
 		await store.saveMessages({
 			threadId: 't-1',
 			resourceId: 'u-1',
-			messages: [makeMsg('user', 'one'), makeMsg('user', 'two')],
+			messages: [
+				makeMsg('user', 'one', new Date(t)),
+				makeMsg('user', 'two', new Date(t + 1)),
+			],
 		});
 		const [first, second] = await store.getMessages('t-1');
 

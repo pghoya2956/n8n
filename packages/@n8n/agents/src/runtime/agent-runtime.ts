@@ -20,6 +20,7 @@ import type {
 	GoogleThinkingConfig,
 	ObservationalMemoryConfig,
 	OpenAIThinkingConfig,
+	ScopeKind,
 	PendingToolCall,
 	RunOptions,
 	SemanticRecallConfig,
@@ -39,7 +40,7 @@ import { AgentMessageList, type SerializedMessageList } from './message-list';
 import { fromAiFinishReason, fromAiMessages } from './messages';
 import { createEmbeddingModel, createModel } from './model-factory';
 import { runObservationalCycle } from './observational-cycle';
-import { loadObservationalMemoryContext } from './observational-memory';
+import { loadObservationalMemoryContext, resolveObservationalScope } from './observational-memory';
 import { generateRunId, RunStateManager } from './run-state';
 import {
 	accumulateUsage,
@@ -1835,11 +1836,15 @@ export class AgentRuntime {
 		// Memory builder validation guarantees the backend implements
 		// BuiltObservationStore when observationalMemory is configured.
 		const store = this.config.memory as BuiltMemory & BuiltObservationStore;
+		const { scopeKind, scopeId } = resolveObservationalScope(
+			this.config.observationalMemory,
+			options,
+		);
 		const ctx = await loadObservationalMemoryContext(
 			store,
 			this.config.observationalMemory,
-			'thread',
-			options.threadId,
+			scopeKind,
+			scopeId,
 		);
 		if (ctx) list.observationalMemory = ctx;
 	}
@@ -1858,34 +1863,47 @@ export class AgentRuntime {
 		const obsConfig = this.config.observationalMemory;
 		const observe = obsConfig?.observe;
 		const memory = this.config.memory;
-		const threadId = options?.persistence?.threadId;
-		if (!obsConfig || !observe || !memory || !threadId) return;
+		const persistence = options?.persistence;
+		if (!obsConfig || !observe || !memory || !persistence?.threadId) return;
 		if (typeof (memory as Partial<BuiltObservationStore>).appendObservations !== 'function') {
 			return;
 		}
 		const store = memory as BuiltMemory & BuiltObservationStore;
-		this.backgroundTasks.track(this.runCatchupIfBehind(store, obsConfig, observe, threadId));
+		const { scopeKind, scopeId } = resolveObservationalScope(obsConfig, persistence);
+		this.backgroundTasks.track(
+			this.runCatchupIfBehind(store, obsConfig, observe, scopeKind, scopeId, persistence.threadId),
+		);
 	}
 
 	private async runCatchupIfBehind(
 		store: BuiltMemory & BuiltObservationStore,
 		obsConfig: ObservationalMemoryConfig,
 		observe: ObserveFn,
+		scopeKind: ScopeKind,
+		scopeId: string,
 		threadId: string,
 	): Promise<void> {
+		// "Behind" detection: compare the cursor's keyset `(lastObservedAt,
+		// lastObservedMessageId)` against the latest message on this thread.
+		// Cross-thread scopes still use this thread's last message as a
+		// conservative trigger — a turn just landed on this thread, so the
+		// scope may have new work.
 		const [cursor, latest] = await Promise.all([
-			store.getCursor('thread', threadId),
+			store.getCursor(scopeKind, scopeId),
 			store.getMessages(threadId, { limit: 1 }),
 		]);
 		if (latest.length === 0) return;
-		const latestSeq = latest[0].seq;
-		if (latestSeq === undefined) return;
-		if (cursor && cursor.lastObservedSeq >= latestSeq) return;
+		const latestMessage = latest[0];
+		if (cursor) {
+			const cmp = latestMessage.createdAt.getTime() - cursor.lastObservedAt.getTime();
+			const ahead = cmp > 0 || (cmp === 0 && latestMessage.id > cursor.lastObservedMessageId);
+			if (!ahead) return;
+		}
 
 		await runObservationalCycle({
 			memory: store,
-			scopeKind: 'thread',
-			scopeId: threadId,
+			scopeKind,
+			scopeId,
 			observe,
 			...(obsConfig.compact !== undefined && { compact: obsConfig.compact }),
 			...(obsConfig.compactionRowThreshold !== undefined && {

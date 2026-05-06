@@ -2715,7 +2715,7 @@ describe('AgentRuntime — observational lazy fallback at TurnStart', () => {
 			scopeKind: 'thread',
 			scopeId: 't-caught',
 			lastObservedMessageId: only.id,
-			lastObservedSeq: only.seq!,
+			lastObservedAt: only.createdAt,
 			updatedAt: new Date(),
 		});
 

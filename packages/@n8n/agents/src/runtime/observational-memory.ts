@@ -42,7 +42,9 @@ export async function loadObservationalMemoryContext(
 	const recentObservations = await store.getObservations({
 		scopeKind,
 		scopeId,
-		sinceSeq: latestSummary?.seq,
+		since: latestSummary
+			? { sinceCreatedAt: latestSummary.createdAt, sinceObservationId: latestSummary.id }
+			: undefined,
 		schemaVersionAtMost: OBSERVATION_SCHEMA_VERSION,
 		onlyUncompacted: true,
 	});
@@ -90,6 +92,19 @@ function defaultFormatContext(ctx: {
 		lines.push(`- ${renderPayload(row.payload)}`);
 	}
 	return lines.join('\n');
+}
+
+/**
+ * Apply the consumer-configured `getScope` resolver, or fall back to thread
+ * scope. Centralising this means the read path, the lazy fallback, and the
+ * `reflect`/`reflectInBackground` write paths all derive scope identically.
+ */
+export function resolveObservationalScope(
+	config: ObservationalMemoryConfig,
+	persistence: { threadId: string; resourceId?: string },
+): { scopeKind: ScopeKind; scopeId: string } {
+	if (config.getScope) return config.getScope(persistence);
+	return { scopeKind: 'thread', scopeId: persistence.threadId };
 }
 
 function renderPayload(payload: unknown): string {

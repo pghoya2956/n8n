@@ -68,7 +68,7 @@ describe('runObservationalCycle', () => {
 			scopeKind: 'thread',
 			scopeId: 't-1',
 			lastObservedMessageId: messages[messages.length - 1].id,
-			lastObservedSeq: messages[messages.length - 1].seq!,
+			lastObservedAt: messages[messages.length - 1].createdAt,
 			updatedAt: new Date(),
 		});
 
@@ -106,7 +106,8 @@ describe('runObservationalCycle', () => {
 
 		const messages = await store.getMessages('t-1');
 		const cursor = await store.getCursor('thread', 't-1');
-		expect(cursor?.lastObservedSeq).toBe(messages[messages.length - 1].seq);
+		expect(cursor?.lastObservedMessageId).toBe(messages[messages.length - 1].id);
+		expect(cursor?.lastObservedAt.getTime()).toBe(messages[messages.length - 1].createdAt.getTime());
 	});
 
 	it('passes the previous summary text and the cursor into observe', async () => {
