@@ -33,8 +33,6 @@ const icon = computed((): IconName => {
 		case 'suspension':
 		case 'idle':
 			return 'clock';
-		case 'compaction':
-			return 'layers';
 		default:
 			return 'info';
 	}

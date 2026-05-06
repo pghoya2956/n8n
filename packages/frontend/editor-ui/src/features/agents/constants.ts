@@ -24,6 +24,8 @@ export const EVALS_SECTION_KEY = '__evals';
 export const CONFIG_JSON_SECTION_KEY = '__config_json';
 /** Synthetic tree key for the agent executions tab. */
 export const EXECUTIONS_SECTION_KEY = '__executions';
+/** Synthetic tree key for the agent memory tab — read-only view of resource-scoped observational memory. */
+export const MEMORY_SECTION_KEY = '__memory';
 
 /**
  * Status of an assistant message during/after streaming.

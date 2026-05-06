@@ -15,6 +15,7 @@ import {
 	wrapToolForApproval,
 } from '@n8n/agents';
 import type { AgentSkill } from '@n8n/api-types';
+import { UnexpectedError } from 'n8n-workflow';
 import { z } from 'zod';
 
 import type {
@@ -25,7 +26,10 @@ import type {
 } from './agent-json-config';
 import { mapCredentialForProvider } from './credential-field-mapping';
 import { resolveProviderToolName } from './provider-tool-aliases';
-import { createObservationalMemoryFunctions } from '../integrations/observational-memory';
+import {
+	buildAgentResourceScopeResolver,
+	createObservationalMemoryFunctions,
+} from '../integrations/observational-memory';
 
 export type ToolResolver = (
 	toolSchema: AgentJsonToolConfig,
@@ -71,6 +75,8 @@ export interface BuildFromJsonOptions {
 	skills?: Record<string, AgentSkill>;
 	/** Memory backend factories keyed by storage preset name. */
 	memoryFactory: MemoryFactory;
+	/** Required when memory.observationalMemory.enabled is true; used as the agent half of the observation scope id. */
+	agentId?: string;
 }
 
 /**
@@ -116,7 +122,13 @@ export async function buildFromJson(
 
 	// Memory
 	if (config.memory?.enabled) {
-		await applyMemoryFromConfig(agent, config.memory, options.memoryFactory, resolvedModelConfig);
+		await applyMemoryFromConfig(
+			agent,
+			config.memory,
+			options.memoryFactory,
+			resolvedModelConfig,
+			options.agentId,
+		);
 	}
 
 	// Config options
@@ -290,6 +302,7 @@ async function applyMemoryFromConfig(
 	memoryConfig: AgentJsonMemoryConfig,
 	memoryFactory: MemoryFactory,
 	resolvedModelConfig: ModelConfig,
+	agentId: string | undefined,
 ) {
 	const memory = new Memory();
 
@@ -309,6 +322,11 @@ async function applyMemoryFromConfig(
 	}
 
 	if (memoryConfig.observationalMemory?.enabled) {
+		if (!agentId) {
+			throw new UnexpectedError(
+				'Observational memory is enabled but no agentId was provided to buildFromJson — cannot build agent+user scope.',
+			);
+		}
 		const { observe, compact, formatContext } = createObservationalMemoryFunctions({
 			modelConfig: resolvedModelConfig,
 		});
@@ -316,6 +334,7 @@ async function applyMemoryFromConfig(
 			observe,
 			compact,
 			formatContext,
+			getScope: buildAgentResourceScopeResolver(agentId),
 			compactionRowThreshold:
 				memoryConfig.observationalMemory.compactionRowThreshold ??
 				DEFAULT_OBSERVATIONAL_COMPACTION_ROW_THRESHOLD,

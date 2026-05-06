@@ -291,6 +291,20 @@ export class AgentsController {
 		return { success: true };
 	}
 
+	@Get('/:agentId/memory')
+	@ProjectScope('agent:read')
+	async getAgentMemory(
+		req: AuthenticatedRequest<{ projectId: string; agentId: string }>,
+		_res: Response,
+		@Param('agentId') agentId: string,
+	) {
+		const agent = await this.agentsService.findById(agentId, req.params.projectId);
+		if (!agent) {
+			throw new NotFoundError(`Agent "${agentId}" not found`);
+		}
+		return await this.agentExecutionService.getAgentMemoryForViewer(agentId, req.user.id);
+	}
+
 	@Get('/:agentId')
 	@ProjectScope('agent:read')
 	async get(

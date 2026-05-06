@@ -4,6 +4,7 @@ import { useI18n } from '@n8n/i18n';
 
 import type { AgentBuilderMainTab } from '../composables/useAgentBuilderMainTabs';
 import type { AgentJsonConfig, AgentResource, AgentSkill } from '../types';
+import AgentMemoryView from '../views/AgentMemoryView.vue';
 import AgentSessionsListView from '../views/AgentSessionsListView.vue';
 import AgentAdvancedPanel from './AgentAdvancedPanel.vue';
 import AgentCapabilitiesSection from './AgentCapabilitiesSection.vue';
@@ -63,6 +64,11 @@ const i18n = useI18n();
 						v-else-if="activeMainTab === 'executions'"
 						:title="i18n.baseText('agents.builder.header.tab.executions')"
 						:description="executionsDescription"
+					/>
+					<AgentPanelHeader
+						v-else-if="activeMainTab === 'memory'"
+						:title="i18n.baseText('agents.builder.header.tab.memory')"
+						:description="i18n.baseText('agents.builder.memoryView.description')"
 					/>
 					<AgentPanelHeader
 						v-else-if="activeMainTab === 'raw'"
@@ -134,6 +140,16 @@ const i18n = useI18n();
 				<AgentSessionsListView
 					v-else-if="activeMainTab === 'executions'"
 					data-testid="agent-executions-panel"
+				/>
+
+				<AgentMemoryView
+					v-else-if="activeMainTab === 'memory'"
+					:config="localConfig"
+					:project-id="projectId"
+					:agent-id="agentId"
+					:disabled="isBuildChatStreaming"
+					data-testid="agent-memory-panel"
+					@update:config="emit('update:config', $event)"
 				/>
 
 				<div v-else-if="activeMainTab === 'raw'" :class="$style.rawPanel">

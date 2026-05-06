@@ -4,11 +4,38 @@ import type {
 	ModelConfig,
 	NewObservation,
 	ObserveFn,
+	ResolveObservationalScope,
 } from '@n8n/agents';
 import { createModel, OBSERVATION_SCHEMA_VERSION } from '@n8n/agents';
 import { Logger } from '@n8n/backend-common';
 import { Container } from '@n8n/di';
 import { generateText } from 'ai';
+
+/**
+ * Encode `(agentId, resourceId)` as a single `scopeId` string for resource-
+ * scoped observational memory. The SDK is consumer-agnostic about scope IDs;
+ * the cli owns this encoding so the read endpoint, the write trigger, and
+ * the lazy fallback all derive scopes identically.
+ */
+export function encodeAgentResourceScopeId(agentId: string, resourceId: string): string {
+	return `${agentId}:${resourceId}`;
+}
+
+/**
+ * `getScope` resolver bound to a specific agent. Use as the
+ * `observationalMemory.getScope` knob on the SDK builder when configuring an
+ * agent whose memory should be agent-and-user-scoped.
+ *
+ * Falls back to thread scope when no `resourceId` is available — that's the
+ * lazy-fallback path before the consumer has plumbed resource info through,
+ * so we'd rather observe under thread than skip silently.
+ */
+export function buildAgentResourceScopeResolver(agentId: string): ResolveObservationalScope {
+	return ({ threadId, resourceId }) => {
+		if (resourceId === undefined) return { scopeKind: 'thread', scopeId: threadId };
+		return { scopeKind: 'resource', scopeId: encodeAgentResourceScopeId(agentId, resourceId) };
+	};
+}
 
 const OBSERVER_PROMPT = `You watch a conversation between a user and an assistant and record only
 BEHAVIOURAL OBSERVATIONS — patterns in how the user engages, not what they say.

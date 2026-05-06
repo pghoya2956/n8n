@@ -1,5 +1,5 @@
 import type { EventKind, IdleRange, TimelineItem } from './session-timeline.types';
-import type { ThreadExecution, ThreadSummary } from './composables/useAgentThreadsApi';
+import type { ThreadExecution } from './composables/useAgentThreadsApi';
 import { formatToolNameForDisplay } from './utils/toolDisplayName';
 
 export const IDLE_THRESHOLD_MS = 10 * 60 * 1000;
@@ -103,7 +103,6 @@ const COLOR_MAP: Record<EventKind, string> = {
 	workflow: 'var(--color--primary)',
 	'working-memory': 'var(--color--foreground--shade-1)',
 	suspension: 'var(--color--warning)',
-	compaction: 'var(--color--gold-500)',
 };
 
 export function kindColorToken(kind: EventKind): string {
@@ -118,7 +117,6 @@ const CHART_BLOCK_COLOR_MAP: Record<EventKind, string> = {
 	workflow: 'var(--color--orange-600)',
 	'working-memory': 'var(--color--mint-600)',
 	suspension: 'var(--color--yellow-600)',
-	compaction: 'var(--color--gold-700)',
 };
 
 export function chartBlockColor(kind: EventKind): string {
@@ -306,35 +304,4 @@ export function flattenExecutionsToTimelineItems(executions: ThreadExecution[]):
 		}
 	}
 	return items;
-}
-
-/**
- * Convert observational-memory rolling-summary rows into timeline items.
- * Each summary becomes a `compaction` pill at its `createdAt`. The summary
- * payload renders in the click-detail panel.
- *
- * Summaries are thread-scoped (not turn-scoped), so they have no
- * `executionId` to attach to. We use the thread id as a synthetic stable
- * key — it satisfies the existing `TimelineItem.executionId` contract and
- * keeps the row uniquely identifiable.
- */
-export function summariesToTimelineItems(
-	threadId: string,
-	summaries: ThreadSummary[],
-): TimelineItem[] {
-	return summaries.map((s) => ({
-		kind: 'compaction',
-		executionId: threadId,
-		timestamp: new Date(s.createdAt).getTime(),
-		summary: s.payload,
-	}));
-}
-
-/**
- * Merge timeline items chronologically. Inputs are individually sorted by
- * `timestamp` already; we just zipper them so `compaction` pills land in
- * the right place between text/tool-call events.
- */
-export function mergeTimelineItems(...lists: TimelineItem[][]): TimelineItem[] {
-	return lists.flat().sort((a, b) => a.timestamp - b.timestamp);
 }

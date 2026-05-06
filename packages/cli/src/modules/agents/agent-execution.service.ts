@@ -11,6 +11,7 @@ import { createEmptyRunExecutionData } from 'n8n-workflow';
 
 import type { MessageRecord } from './execution-recorder';
 import { N8nMemory } from './integrations/n8n-memory';
+import { encodeAgentResourceScopeId } from './integrations/observational-memory';
 import { ExecutionThread } from './entities/execution-thread.entity';
 import { ExecutionThreadRepository } from './repositories/execution-thread.repository';
 
@@ -300,30 +301,65 @@ export class AgentExecutionService {
 		const thread = await this.executionThreadRepository.findOneBy({ id: threadId });
 		if (!thread || !threadBelongsTo(thread, projectId, agentId)) return null;
 
-		const [executions, summaryRows] = await Promise.all([
-			this.executionRepository.find({
-				where: { threadId },
-				order: { createdAt: 'ASC' },
-				relations: ['metadata'],
+		const executions = await this.executionRepository.find({
+			where: { threadId },
+			order: { createdAt: 'ASC' },
+			relations: ['metadata'],
+		});
+
+		return { thread, executions };
+	}
+
+	/**
+	 * Fetch the rolling observational-memory summary for an (agent, user) pair.
+	 *
+	 * Observational memory is `'resource'`-scoped with `scopeId = "${agentId}:${resourceId}"`.
+	 * For the agent builder UI, the viewer is the n8n editor and `resourceId === user.id`
+	 * for builder-test interactions — this is the path this endpoint reads. Production
+	 * traffic from chat bridges (whose resourceIds are platform user IDs) is out of
+	 * scope here; those end-users get personalised behaviour through the bridge
+	 * without needing UI on the n8n side.
+	 *
+	 * `observationCount` is the number of uncompacted observation rows after the
+	 * latest summary — useful as an empty-state signal ("observations queued but
+	 * no summary yet").
+	 */
+	async getAgentMemoryForViewer(
+		agentId: string,
+		viewerUserId: string,
+	): Promise<{
+		summary: string | null;
+		summaryUpdatedAt: string | null;
+		observationCount: number;
+	}> {
+		const scopeId = encodeAgentResourceScopeId(agentId, viewerUserId);
+
+		const [summaryRows, uncompacted] = await Promise.all([
+			this.n8nMemory.getObservations({
+				scopeKind: 'resource',
+				scopeId,
+				kindIs: 'summary',
+				limit: 1,
 			}),
 			this.n8nMemory.getObservations({
-				scopeKind: 'thread',
-				scopeId: threadId,
-				kindIs: 'summary',
+				scopeKind: 'resource',
+				scopeId,
+				onlyUncompacted: true,
 			}),
 		]);
 
-		// Surface only the fields the FE needs to render the rolling-summary
-		// timeline items. The full row is intentionally narrowed to keep the
-		// payload small and avoid leaking schema details.
-		const summaries = summaryRows.map((row) => ({
-			id: row.id,
-			seq: row.seq,
-			payload: typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload),
-			createdAt: row.createdAt.toISOString(),
-		}));
+		const latest = summaryRows[summaryRows.length - 1] ?? null;
+		const observationCount = uncompacted.filter((r) => r.kind !== 'summary').length;
 
-		return { thread, executions, summaries };
+		return {
+			summary: latest
+				? typeof latest.payload === 'string'
+					? latest.payload
+					: JSON.stringify(latest.payload)
+				: null,
+			summaryUpdatedAt: latest ? latest.createdAt.toISOString() : null,
+			observationCount,
+		};
 	}
 
 	/**

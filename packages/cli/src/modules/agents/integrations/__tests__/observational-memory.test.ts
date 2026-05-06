@@ -26,7 +26,7 @@ function buildObserveCtx(overrides: { transcript?: string; summary?: string | nu
 			scopeKind: 'thread',
 			scopeId: 't-1',
 			lastObservedMessageId: 'm0',
-			lastObservedSeq: 0,
+			lastObservedAt: new Date(),
 			updatedAt: new Date(),
 		} satisfies ObservationCursor,
 		scopeKind: 'thread' as const,

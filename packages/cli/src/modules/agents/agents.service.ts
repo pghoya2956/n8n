@@ -971,8 +971,10 @@ export class AgentsService {
 
 		// Fire-and-forget the observational-memory cycle through the SDK's
 		// background-task tracker. Errors surface via `AgentEvent.Error`.
-		// No-op when observational memory isn't configured.
-		agentInstance.reflectInBackground({ threadId });
+		// No-op when observational memory isn't configured. `resourceId` is
+		// forwarded so the agent's `getScope` resolver can produce
+		// agent+user resource scope.
+		agentInstance.reflectInBackground({ threadId, resourceId });
 
 		const messageRecord = recorder.getMessageRecord();
 		void this.agentExecutionService
@@ -1504,6 +1506,7 @@ export class AgentsService {
 			},
 			skills: agentEntity.skills ?? {},
 			memoryFactory: this.getMemoryFactory(),
+			agentId: agentEntity.id,
 		});
 
 		await this.injectRuntimeDependencies({

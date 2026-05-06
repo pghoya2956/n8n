@@ -135,8 +135,6 @@ const headerTitle = computed((): string => {
 	if (item.kind === 'working-memory') return i18n.baseText('agentSessions.timeline.memory');
 	if (item.kind === 'user') return i18n.baseText('agentSessions.timeline.user');
 	if (item.kind === 'agent') return i18n.baseText('agentSessions.timeline.agent');
-	if (item.kind === 'compaction')
-		return i18n.baseText('agentSessions.timeline.detail.compaction.title');
 	return i18n.baseText('agentSessions.timeline.suspended');
 });
 
@@ -149,7 +147,6 @@ const headerIcon = computed((): IconName => {
 	if (item.kind === 'working-memory') return 'brain';
 	if (item.kind === 'user') return 'user';
 	if (item.kind === 'agent') return 'bot';
-	if (item.kind === 'compaction') return 'layers';
 	return 'clock';
 });
 
@@ -364,37 +361,6 @@ const workflowFormOutput = computed((): { formUrl: string; message: string } | n
 
 					<template v-else-if="item.kind === 'user' || item.kind === 'agent'">
 						<VueMarkdown :source="item.content ?? ''" :class="$style.markdown" />
-					</template>
-
-					<template v-else-if="item.kind === 'compaction'">
-						<div v-if="item.summary" :class="$style.codeBlock">
-							<div :class="$style.codeBlockCopy">
-								<N8nTooltip
-									:content="
-										copiedBlock === 'compaction-summary'
-											? i18n.baseText('agents.builder.addTrigger.copied')
-											: i18n.baseText('agents.builder.addTrigger.copy')
-									"
-								>
-									<N8nButton
-										variant="outline"
-										size="small"
-										icon-only
-										:icon="copiedBlock === 'compaction-summary' ? 'check' : 'copy'"
-										:aria-label="
-											copiedBlock === 'compaction-summary'
-												? i18n.baseText('agents.builder.addTrigger.copied')
-												: i18n.baseText('agents.builder.addTrigger.copy')
-										"
-										@click="copyJsonBlock('compaction-summary', item.summary)"
-									/>
-								</N8nTooltip>
-							</div>
-							<pre :class="$style.json">{{ item.summary }}</pre>
-						</div>
-						<p :class="$style.about">
-							{{ i18n.baseText('agentSessions.timeline.detail.compaction.about') }}
-						</p>
 					</template>
 				</div>
 			</div>

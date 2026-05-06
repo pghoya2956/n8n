@@ -5,8 +5,7 @@ export type EventKind =
 	| 'node'
 	| 'workflow'
 	| 'working-memory'
-	| 'suspension'
-	| 'compaction';
+	| 'suspension';
 
 export interface TimelineItem {
 	kind: EventKind;
@@ -34,8 +33,6 @@ export interface TimelineItem {
 	 */
 	nodeParameters?: Record<string, unknown>;
 	resumed?: boolean;
-	/** The behavioural-patterns summary the compactor produced (only set for `kind: 'compaction'`). */
-	summary?: string;
 }
 
 export interface IdleRange {
