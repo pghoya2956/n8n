@@ -16,4 +16,14 @@ export class AgentObservationCursorEntity extends WithTimestamps {
 
 	@DateTimeColumn()
 	lastObservedAt: Date;
+
+	/**
+	 * The rolling summary itself. One row per scope; the compactor UPSERTs this
+	 * column on every compaction. `null` until the first compaction has run.
+	 */
+	@Column({ type: 'text', nullable: true })
+	summary: string | null;
+
+	@DateTimeColumn({ nullable: true })
+	summaryUpdatedAt: Date | null;
 }

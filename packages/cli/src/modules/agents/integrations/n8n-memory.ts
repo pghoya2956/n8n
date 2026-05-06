@@ -311,11 +311,16 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 			scopeId: entity.scopeId,
 			lastObservedMessageId: entity.lastObservedMessageId,
 			lastObservedAt: entity.lastObservedAt,
+			summary: entity.summary,
+			summaryUpdatedAt: entity.summaryUpdatedAt,
 			updatedAt: entity.updatedAt,
 		};
 	}
 
 	async setCursor(cursor: ObservationCursor): Promise<void> {
+		// Owns cursor-advance fields only. The TypeORM upsert with the explicit
+		// `conflictPaths` writes the listed columns; summary fields stay at
+		// whatever the existing row has (or NULL on insert).
 		await this.observationCursorRepository.upsert(
 			{
 				scopeKind: cursor.scopeKind,
@@ -324,8 +329,34 @@ export class N8nMemory implements BuiltMemory, BuiltObservationStore {
 				lastObservedAt: cursor.lastObservedAt,
 				updatedAt: cursor.updatedAt,
 			},
-			['scopeKind', 'scopeId'],
+			{ conflictPaths: ['scopeKind', 'scopeId'], skipUpdateIfNoValuesChanged: false },
 		);
+	}
+
+	async setRollingSummary(
+		scopeKind: ScopeKind,
+		scopeId: string,
+		summary: string,
+		now: Date,
+	): Promise<void> {
+		// Owns rolling-summary fields only. Use the query builder so we can
+		// update only `summary` + `summaryUpdatedAt` (+ `updatedAt`) on conflict
+		// and leave the cursor-advance fields untouched. Defensive defaults
+		// cover the case where a compaction races ahead of the first observe.
+		await this.observationCursorRepository
+			.createQueryBuilder()
+			.insert()
+			.values({
+				scopeKind,
+				scopeId,
+				lastObservedMessageId: '',
+				lastObservedAt: new Date(0),
+				summary,
+				summaryUpdatedAt: now,
+				updatedAt: now,
+			})
+			.orUpdate(['summary', 'summaryUpdatedAt', 'updatedAt'], ['scopeKind', 'scopeId'])
+			.execute();
 	}
 
 	// ── Observational memory: locks ──────────────────────────────────────

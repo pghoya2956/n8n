@@ -140,13 +140,15 @@ describe('InMemoryMemory — cursors', () => {
 		expect(await mem.getCursor('thread', 't-1')).toBeNull();
 	});
 
-	it('round-trips and overwrites on re-set', async () => {
+	it('round-trips cursor-advance fields and overwrites on re-set', async () => {
 		const mem = new InMemoryMemory();
 		const first: ObservationCursor = {
 			scopeKind: 'thread',
 			scopeId: 't-1',
 			lastObservedMessageId: 'm-1',
 			lastObservedAt: new Date(2026, 0, 1, 0, 0, 0, 5),
+			summary: null,
+			summaryUpdatedAt: null,
 			updatedAt: new Date(2026, 0, 1),
 		};
 		await mem.setCursor(first);
@@ -169,9 +171,76 @@ describe('InMemoryMemory — cursors', () => {
 			scopeId: 'A',
 			lastObservedMessageId: 'm-A',
 			lastObservedAt: new Date(),
+			summary: null,
+			summaryUpdatedAt: null,
 			updatedAt: new Date(),
 		});
 		expect(await mem.getCursor('thread', 'B')).toBeNull();
+	});
+
+	it('setRollingSummary writes the summary fields and leaves cursor-advance untouched', async () => {
+		const mem = new InMemoryMemory();
+		const cursorAt = new Date(2026, 0, 1, 0, 0, 0, 500);
+		await mem.setCursor({
+			scopeKind: 'thread',
+			scopeId: 't-1',
+			lastObservedMessageId: 'm-77',
+			lastObservedAt: cursorAt,
+			summary: null,
+			summaryUpdatedAt: null,
+			updatedAt: new Date(2026, 0, 1),
+		});
+
+		const summaryAt = new Date(2026, 0, 1, 1, 0, 0);
+		await mem.setRollingSummary('thread', 't-1', '- a bullet\n- another', summaryAt);
+
+		const reread = await mem.getCursor('thread', 't-1');
+		expect(reread?.summary).toBe('- a bullet\n- another');
+		expect(reread?.summaryUpdatedAt?.getTime()).toBe(summaryAt.getTime());
+		// Cursor-advance fields preserved.
+		expect(reread?.lastObservedMessageId).toBe('m-77');
+		expect(reread?.lastObservedAt.getTime()).toBe(cursorAt.getTime());
+	});
+
+	it('setCursor preserves an existing rolling summary', async () => {
+		const mem = new InMemoryMemory();
+		await mem.setCursor({
+			scopeKind: 'thread',
+			scopeId: 't-1',
+			lastObservedMessageId: 'm-1',
+			lastObservedAt: new Date(2026, 0, 1),
+			summary: null,
+			summaryUpdatedAt: null,
+			updatedAt: new Date(2026, 0, 1),
+		});
+		await mem.setRollingSummary('thread', 't-1', 'rolling state', new Date(2026, 0, 2));
+
+		// A subsequent observe-cycle write must not clobber the summary.
+		await mem.setCursor({
+			scopeKind: 'thread',
+			scopeId: 't-1',
+			lastObservedMessageId: 'm-99',
+			lastObservedAt: new Date(2026, 0, 3),
+			summary: null,
+			summaryUpdatedAt: null,
+			updatedAt: new Date(2026, 0, 3),
+		});
+
+		const reread = await mem.getCursor('thread', 't-1');
+		expect(reread?.summary).toBe('rolling state');
+		expect(reread?.lastObservedMessageId).toBe('m-99');
+	});
+
+	it('setRollingSummary creates the cursor row when missing (compaction-before-observe)', async () => {
+		const mem = new InMemoryMemory();
+		const at = new Date(2026, 0, 5);
+		await mem.setRollingSummary('thread', 't-fresh', 'first compaction', at);
+
+		const reread = await mem.getCursor('thread', 't-fresh');
+		expect(reread).not.toBeNull();
+		expect(reread?.summary).toBe('first compaction');
+		expect(reread?.summaryUpdatedAt?.getTime()).toBe(at.getTime());
+		expect(reread?.lastObservedMessageId).toBe('');
 	});
 });
 

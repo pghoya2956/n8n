@@ -288,7 +288,42 @@ export class InMemoryMemory implements BuiltMemory, BuiltObservationStore {
 
 	// eslint-disable-next-line @typescript-eslint/require-await
 	async setCursor(cursor: ObservationCursor): Promise<void> {
-		this.cursorsByScope.set(scopeKey(cursor.scopeKind, cursor.scopeId), { ...cursor });
+		// Preserve summary fields when present on an existing row — `setCursor`
+		// only owns the cursor-advance fields. `setRollingSummary` owns summary.
+		const key = scopeKey(cursor.scopeKind, cursor.scopeId);
+		const existing = this.cursorsByScope.get(key);
+		this.cursorsByScope.set(key, {
+			...cursor,
+			summary: existing?.summary ?? cursor.summary ?? null,
+			summaryUpdatedAt: existing?.summaryUpdatedAt ?? cursor.summaryUpdatedAt ?? null,
+		});
+	}
+
+	// eslint-disable-next-line @typescript-eslint/require-await
+	async setRollingSummary(
+		scopeKind: ScopeKind,
+		scopeId: string,
+		summary: string,
+		now: Date,
+	): Promise<void> {
+		const key = scopeKey(scopeKind, scopeId);
+		const existing = this.cursorsByScope.get(key);
+		if (existing) {
+			this.cursorsByScope.set(key, { ...existing, summary, summaryUpdatedAt: now, updatedAt: now });
+			return;
+		}
+		// Defensive: create the cursor row if a compaction lands before the
+		// first observe cycle ever wrote one. Cursor-advance fields stay empty
+		// strings / epoch since they'll be overwritten by the next observe.
+		this.cursorsByScope.set(key, {
+			scopeKind,
+			scopeId,
+			lastObservedMessageId: '',
+			lastObservedAt: new Date(0),
+			summary,
+			summaryUpdatedAt: now,
+			updatedAt: now,
+		});
 	}
 
 	// eslint-disable-next-line @typescript-eslint/require-await

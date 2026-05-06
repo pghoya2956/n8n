@@ -330,7 +330,7 @@ describe('N8nMemory', () => {
 
 	function makeNewObs(overrides: Partial<NewObservation> = {}): NewObservation {
 		return {
-			scopeKind: 'thread',
+			scopeKind: 'resource',
 			scopeId: 't-1',
 			kind: 'observation',
 			payload: { text: 'hello' },
@@ -380,7 +380,7 @@ describe('N8nMemory', () => {
 		it('passes filters through to find()', async () => {
 			const sinceCreatedAt = new Date('2026-05-05T00:00:00Z');
 			await memory.getObservations({
-				scopeKind: 'thread',
+				scopeKind: 'resource',
 				scopeId: 't-1',
 				since: { sinceCreatedAt, sinceObservationId: 'obs-anchor' },
 				kindIs: 'summary',
@@ -392,7 +392,7 @@ describe('N8nMemory', () => {
 			expect(observationRepository.find).toHaveBeenCalledWith({
 				where: [
 					{
-						scopeKind: 'thread',
+						scopeKind: 'resource',
 						scopeId: 't-1',
 						kind: 'summary',
 						compactedAt: IsNull(),
@@ -400,7 +400,7 @@ describe('N8nMemory', () => {
 						createdAt: MoreThan(sinceCreatedAt),
 					},
 					{
-						scopeKind: 'thread',
+						scopeKind: 'resource',
 						scopeId: 't-1',
 						kind: 'summary',
 						compactedAt: IsNull(),
@@ -415,10 +415,10 @@ describe('N8nMemory', () => {
 		});
 
 		it('omits absent filters', async () => {
-			await memory.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
+			await memory.getObservations({ scopeKind: 'resource', scopeId: 't-1' });
 
 			expect(observationRepository.find).toHaveBeenCalledWith({
-				where: [{ scopeKind: 'thread', scopeId: 't-1' }],
+				where: [{ scopeKind: 'resource', scopeId: 't-1' }],
 				order: { createdAt: 'ASC', id: 'ASC' },
 			});
 		});
@@ -427,7 +427,7 @@ describe('N8nMemory', () => {
 			observationRepository.find.mockResolvedValue([
 				{
 					id: 'obs-1',
-					scopeKind: 'thread',
+					scopeKind: 'resource',
 					scopeId: 't-1',
 					kind: 'observation',
 					payload: { text: 'hi' },
@@ -439,7 +439,7 @@ describe('N8nMemory', () => {
 				} as AgentObservationEntity,
 			]);
 
-			const [row] = await memory.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
+			const [row] = await memory.getObservations({ scopeKind: 'resource', scopeId: 't-1' });
 			expect(row.durationMs).toBe(1000);
 			expect(row.schemaVersion).toBe(1);
 		});
@@ -468,13 +468,16 @@ describe('N8nMemory', () => {
 			expect(await memory.getCursor('thread', 't-1')).toBeNull();
 		});
 
-		it('reads lastObservedAt and lastObservedMessageId', async () => {
+		it('reads lastObservedAt, lastObservedMessageId, and rolling-summary fields', async () => {
 			const lastObservedAt = new Date('2026-05-05T00:00:00.250Z');
+			const summaryUpdatedAt = new Date('2026-05-05T01:00:00.000Z');
 			observationCursorRepository.findOneBy.mockResolvedValue({
-				scopeKind: 'thread',
+				scopeKind: 'resource',
 				scopeId: 't-1',
 				lastObservedMessageId: 'm-7',
 				lastObservedAt,
+				summary: '- bullet a\n- bullet b',
+				summaryUpdatedAt,
 				createdAt: new Date(),
 				updatedAt: new Date('2026-05-05T00:00:00Z'),
 			} as AgentObservationCursorEntity);
@@ -482,27 +485,66 @@ describe('N8nMemory', () => {
 			const cursor = await memory.getCursor('thread', 't-1');
 			expect(cursor?.lastObservedAt.getTime()).toBe(lastObservedAt.getTime());
 			expect(cursor?.lastObservedMessageId).toBe('m-7');
+			expect(cursor?.summary).toBe('- bullet a\n- bullet b');
+			expect(cursor?.summaryUpdatedAt?.getTime()).toBe(summaryUpdatedAt.getTime());
 		});
 
-		it('upserts on setCursor keyed by (scopeKind, scopeId)', async () => {
+		it('upserts on setCursor with cursor-advance fields keyed by (scopeKind, scopeId)', async () => {
 			const lastObservedAt = new Date('2026-05-05T00:00:00.500Z');
 			await memory.setCursor({
-				scopeKind: 'thread',
+				scopeKind: 'resource',
 				scopeId: 't-1',
 				lastObservedMessageId: 'm-9',
 				lastObservedAt,
+				summary: null,
+				summaryUpdatedAt: null,
 				updatedAt: new Date('2026-05-05T00:00:00Z'),
 			});
 
 			expect(observationCursorRepository.upsert).toHaveBeenCalledWith(
 				expect.objectContaining({
-					scopeKind: 'thread',
+					scopeKind: 'resource',
 					scopeId: 't-1',
 					lastObservedMessageId: 'm-9',
 					lastObservedAt,
 				}),
+				expect.objectContaining({ conflictPaths: ['scopeKind', 'scopeId'] }),
+			);
+			// Summary fields are NOT in the upsert payload — `setRollingSummary`
+			// owns those, so the observe-cycle write doesn't clobber them.
+			const call = observationCursorRepository.upsert.mock.calls[0][0] as Record<string, unknown>;
+			expect(call).not.toHaveProperty('summary');
+			expect(call).not.toHaveProperty('summaryUpdatedAt');
+		});
+
+		it('setRollingSummary writes summary fields via createQueryBuilder upsert', async () => {
+			// The cli implementation uses createQueryBuilder().insert().orUpdate()
+			// to update only `summary` + `summaryUpdatedAt` (+ updatedAt) on conflict.
+			// The mocked repository exposes a chainable builder mock.
+			const builderExecute = jest.fn().mockResolvedValue(undefined);
+			const builderOrUpdate = jest.fn().mockReturnValue({ execute: builderExecute });
+			const builderValues = jest.fn().mockReturnValue({ orUpdate: builderOrUpdate });
+			const builderInsert = jest.fn().mockReturnValue({ values: builderValues });
+			(observationCursorRepository.createQueryBuilder as jest.Mock).mockReturnValue({
+				insert: builderInsert,
+			});
+
+			const summaryAt = new Date('2026-05-05T02:00:00Z');
+			await memory.setRollingSummary('resource', 't-1', '- new bullet', summaryAt);
+
+			expect(builderValues).toHaveBeenCalledWith(
+				expect.objectContaining({
+					scopeKind: 'resource',
+					scopeId: 't-1',
+					summary: '- new bullet',
+					summaryUpdatedAt: summaryAt,
+				}),
+			);
+			expect(builderOrUpdate).toHaveBeenCalledWith(
+				['summary', 'summaryUpdatedAt', 'updatedAt'],
 				['scopeKind', 'scopeId'],
 			);
+			expect(builderExecute).toHaveBeenCalledTimes(1);
 		});
 	});
 
@@ -530,7 +572,7 @@ describe('N8nMemory', () => {
 
 		it('refuses a different holder while the lock is live', async () => {
 			observationLockRepository.findOneBy.mockResolvedValue({
-				scopeKind: 'thread',
+				scopeKind: 'resource',
 				scopeId: 't-1',
 				holderId: 'A',
 				heldUntil: new Date(Date.now() + 60_000),
@@ -546,7 +588,7 @@ describe('N8nMemory', () => {
 
 		it('reclaims the lock for a new holder once the prior one has expired', async () => {
 			observationLockRepository.findOneBy.mockResolvedValue({
-				scopeKind: 'thread',
+				scopeKind: 'resource',
 				scopeId: 't-1',
 				holderId: 'A',
 				heldUntil: new Date(Date.now() - 1_000),
@@ -563,7 +605,7 @@ describe('N8nMemory', () => {
 
 		it('lets the same holder refresh the TTL while still held', async () => {
 			observationLockRepository.findOneBy.mockResolvedValue({
-				scopeKind: 'thread',
+				scopeKind: 'resource',
 				scopeId: 't-1',
 				holderId: 'A',
 				heldUntil: new Date(Date.now() + 30_000),
@@ -579,13 +621,13 @@ describe('N8nMemory', () => {
 
 		it('release deletes only the matching holder', async () => {
 			await memory.releaseObservationLock({
-				scopeKind: 'thread',
+				scopeKind: 'resource',
 				scopeId: 't-1',
 				holderId: 'A',
 				heldUntil: new Date(),
 			});
 			expect(observationLockRepository.delete).toHaveBeenCalledWith({
-				scopeKind: 'thread',
+				scopeKind: 'resource',
 				scopeId: 't-1',
 				holderId: 'A',
 			});

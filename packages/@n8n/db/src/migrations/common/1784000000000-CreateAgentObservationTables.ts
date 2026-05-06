@@ -6,9 +6,13 @@ import type { MigrationContext, ReversibleMigration } from '../migration-types';
  * - `agents_observations`: append-only observation log keyed by `(scopeKind,
  *   scopeId)` and ordered by `(createdAt, id)`. Consumers define `kind`;
  *   payload is JSON. `compactedAt` is a soft-flag set by the compactor.
- * - `agents_observation_cursors`: per-scope progress marker so the observer
- *   can replay only the message delta since its last successful run.
- *   `(lastObservedAt, lastObservedMessageId)` is the keyset cursor.
+ * - `agents_observation_cursors`: per-scope mutable state. Two distinct
+ *   responsibilities live on this row:
+ *     - `(lastObservedAt, lastObservedMessageId)` — the keyset cursor that
+ *       advances every observe cycle.
+ *     - `(summary, summaryUpdatedAt)` — the rolling summary itself. There is
+ *       exactly one rolling summary per scope; UPSERTing the cursor row is
+ *       the single write path, no separate summary log row needed.
  * - `agents_observation_locks`: per-scope advisory lock with TTL so two
  *   observers on the same scope can't stomp each other.
  *
@@ -39,6 +43,8 @@ export class CreateAgentObservationTables1784000000000 implements ReversibleMigr
 			column('scopeId').varchar(255).notNull.primary,
 			column('lastObservedMessageId').varchar(36).notNull,
 			column('lastObservedAt').timestamp(3).notNull,
+			column('summary').text,
+			column('summaryUpdatedAt').timestamp(3),
 		).withTimestamps;
 
 		await createTable('agents_observation_locks').withColumns(

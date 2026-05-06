@@ -36,16 +36,22 @@ export interface Observation {
 export type NewObservation = Omit<Observation, 'id'>;
 
 /**
- * Per-scope progress marker. The `(lastObservedAt, lastObservedMessageId)` pair
- * is a keyset cursor: `lastObservedAt` is the primary order key, with
- * `lastObservedMessageId` breaking `createdAt` ties. The same shape works for
- * thread-scoped and cross-thread scopes.
+ * Per-scope mutable state. Two responsibilities live on this row:
+ *
+ * - `(lastObservedAt, lastObservedMessageId)` — keyset cursor that advances
+ *   every observe cycle. `lastObservedAt` is the primary order key,
+ *   `lastObservedMessageId` is the tiebreaker on identical `createdAt`.
+ * - `(summary, summaryUpdatedAt)` — the rolling summary itself. One per
+ *   scope; the compactor UPSERTs these via `setRollingSummary` on each
+ *   compaction. `null` until the first compaction has run.
  */
 export interface ObservationCursor {
 	scopeKind: ScopeKind;
 	scopeId: string;
 	lastObservedMessageId: string;
 	lastObservedAt: Date;
+	summary: string | null;
+	summaryUpdatedAt: Date | null;
 	updatedAt: Date;
 }
 
@@ -148,8 +154,25 @@ export interface BuiltObservationStore {
 	markObservationsCompacted(ids: string[], compactedAt: Date): Promise<void>;
 	/** Read the cursor for a scope; `null` if none has been written yet. */
 	getCursor(scopeKind: ScopeKind, scopeId: string): Promise<ObservationCursor | null>;
-	/** Upsert the cursor for a scope. */
+	/**
+	 * Upsert the cursor-advance fields for a scope. Touches
+	 * `lastObservedMessageId`, `lastObservedAt`, `updatedAt`. Does NOT touch the
+	 * rolling-summary fields — those are managed by `setRollingSummary` so the
+	 * frequent observe-cycle write doesn't clobber the rare compaction write.
+	 */
 	setCursor(cursor: ObservationCursor): Promise<void>;
+	/**
+	 * Upsert the rolling-summary fields for a scope. Touches `summary` +
+	 * `summaryUpdatedAt`. Does NOT touch the cursor-advance fields. Creates the
+	 * cursor row if absent (an early compaction — unusual but safe — would land
+	 * before the first observe cycle wrote the cursor).
+	 */
+	setRollingSummary(
+		scopeKind: ScopeKind,
+		scopeId: string,
+		summary: string,
+		now: Date,
+	): Promise<void>;
 	/**
 	 * Acquire a per-scope advisory lock with TTL. Returns a handle on
 	 * success or `null` if the lock is held by another holder and not yet
