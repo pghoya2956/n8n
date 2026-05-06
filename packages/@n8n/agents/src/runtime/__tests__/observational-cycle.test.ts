@@ -69,6 +69,8 @@ describe('runObservationalCycle', () => {
 			scopeId: 't-1',
 			lastObservedMessageId: messages[messages.length - 1].id,
 			lastObservedAt: messages[messages.length - 1].createdAt,
+			summary: null,
+			summaryUpdatedAt: null,
 			updatedAt: new Date(),
 		});
 
@@ -107,13 +109,17 @@ describe('runObservationalCycle', () => {
 		const messages = await store.getMessages('t-1');
 		const cursor = await store.getCursor('thread', 't-1');
 		expect(cursor?.lastObservedMessageId).toBe(messages[messages.length - 1].id);
-		expect(cursor?.lastObservedAt.getTime()).toBe(messages[messages.length - 1].createdAt.getTime());
+		expect(cursor?.lastObservedAt.getTime()).toBe(
+			messages[messages.length - 1].createdAt.getTime(),
+		);
 	});
 
-	it('passes the previous summary text and the cursor into observe', async () => {
+	it('reads the previous summary from the cursor and passes it into observe', async () => {
 		const store = new InMemoryMemory();
 		await seedThread(store, 't-1', 2);
-		await store.appendObservations([makeNewObs({ kind: 'summary', payload: 'rolling state' })]);
+		// Seed a cursor row with a rolling summary, mirroring what a previous
+		// compaction would have written via setRollingSummary.
+		await store.setRollingSummary('thread', 't-1', 'rolling state', new Date());
 
 		const observe = jest
 			.fn<Promise<NewObservation[]>, [Parameters<ObserveFn>[0]]>()
@@ -129,7 +135,7 @@ describe('runObservationalCycle', () => {
 		expect(observe).toHaveBeenCalledTimes(1);
 		const arg = observe.mock.calls[0][0];
 		expect(arg.currentSummary).toBe('rolling state');
-		expect(arg.cursor).toBeNull();
+		expect(arg.cursor?.summary).toBe('rolling state');
 		expect(arg.deltaMessages.length).toBe(2);
 	});
 
@@ -183,7 +189,7 @@ describe('runObservationalCycle', () => {
 		expect(compact).not.toHaveBeenCalled();
 	});
 
-	it('runs compact when threshold crossed and flags inputs as compacted', async () => {
+	it('runs compact when threshold crossed: writes summary to cursor, flags inputs as compacted', async () => {
 		const store = new InMemoryMemory();
 		await seedThread(store, 't-1', 1);
 		// Pre-seed observations so the threshold is reached after observe writes.
@@ -196,11 +202,9 @@ describe('runObservationalCycle', () => {
 			.fn()
 			.mockResolvedValue([makeNewObs({ payload: 'fresh' })]) as unknown as ObserveFn;
 
-		const summaryRow: NewObservation = makeNewObs({
-			kind: 'summary',
-			payload: 'compacted summary',
-		});
-		const compact = jest.fn().mockResolvedValue({ summary: summaryRow }) as unknown as CompactFn;
+		const compact = jest.fn().mockResolvedValue({
+			summary: makeNewObs({ kind: 'summary', payload: 'compacted summary' }),
+		}) as unknown as CompactFn;
 
 		const result = await runObservationalCycle({
 			memory: store,
@@ -214,17 +218,75 @@ describe('runObservationalCycle', () => {
 		if (result.status !== 'ran') throw new Error('expected status=ran');
 		expect(result.compacted).toBe(true);
 
-		const all = await store.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
-		const summaries = all.filter((r) => r.kind === 'summary');
-		expect(summaries.map((r) => r.payload)).toContain('compacted summary');
+		// Summary lives on the cursor, not in the observations table.
+		const cursor = await store.getCursor('thread', 't-1');
+		expect(cursor?.summary).toBe('compacted summary');
+		expect(cursor?.summaryUpdatedAt).toBeInstanceOf(Date);
 
+		const allObs = await store.getObservations({ scopeKind: 'thread', scopeId: 't-1' });
+		expect(allObs.every((r) => r.kind === 'observation')).toBe(true);
+
+		// All input observations got flagged as compacted.
 		const uncompacted = await store.getObservations({
 			scopeKind: 'thread',
 			scopeId: 't-1',
 			onlyUncompacted: true,
 		});
-		// Only the freshly-written summary remains uncompacted; everything else got flagged.
-		expect(uncompacted.filter((r) => r.kind !== 'summary')).toHaveLength(0);
+		expect(uncompacted).toHaveLength(0);
+	});
+
+	it('compacting a second time replaces the rolling summary on the cursor', async () => {
+		const store = new InMemoryMemory();
+		await seedThread(store, 't-1', 1);
+		await store.appendObservations([makeNewObs(), makeNewObs()]);
+
+		const observe = jest.fn().mockResolvedValue([makeNewObs()]) as unknown as ObserveFn;
+
+		const compact = jest
+			.fn()
+			.mockResolvedValueOnce({ summary: makeNewObs({ kind: 'summary', payload: 'summary v1' }) })
+			.mockResolvedValueOnce({
+				summary: makeNewObs({ kind: 'summary', payload: 'summary v2' }),
+			}) as unknown as CompactFn;
+
+		await runObservationalCycle({
+			memory: store,
+			scopeKind: 'thread',
+			scopeId: 't-1',
+			observe,
+			compact,
+			compactionRowThreshold: 3,
+		});
+
+		// Reset thread for a second cycle: append more messages + observations.
+		const t2 = Date.now();
+		await store.saveMessages({
+			threadId: 't-1',
+			resourceId: 'u-1',
+			messages: [makeMsg('user', 'next-1'), makeMsg('assistant', 'next-2')],
+		});
+		await store.appendObservations([
+			makeNewObs({ payload: 'second-1', createdAt: new Date(t2) }),
+			makeNewObs({ payload: 'second-2', createdAt: new Date(t2 + 1) }),
+		]);
+
+		await runObservationalCycle({
+			memory: store,
+			scopeKind: 'thread',
+			scopeId: 't-1',
+			observe,
+			compact,
+			compactionRowThreshold: 3,
+		});
+
+		// Compactor was given the previous summary as input on the second run.
+		const compactCalls = (compact as unknown as jest.Mock).mock.calls;
+		expect(compactCalls[0][0].previousSummary).toBeNull();
+		expect(compactCalls[1][0].previousSummary).toBe('summary v1');
+
+		// Cursor now holds only the latest summary — no accumulating rows.
+		const cursor = await store.getCursor('thread', 't-1');
+		expect(cursor?.summary).toBe('summary v2');
 	});
 
 	it('catches compact() errors and emits AgentEvent.Error tagged compactor (still returns ran)', async () => {

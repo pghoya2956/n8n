@@ -45,11 +45,16 @@ export async function advanceCursor(
 	lastMessage: AgentDbMessage,
 	now: Date = new Date(),
 ): Promise<ObservationCursor> {
+	// `setCursor` owns cursor-advance fields only — `summary`/`summaryUpdatedAt`
+	// are passed as null and ignored by every backend (the storage preserves
+	// whatever the existing row holds). See `BuiltObservationStore.setCursor`.
 	const cursor: ObservationCursor = {
 		scopeKind,
 		scopeId,
 		lastObservedMessageId: lastMessage.id,
 		lastObservedAt: lastMessage.createdAt,
+		summary: null,
+		summaryUpdatedAt: null,
 		updatedAt: now,
 	};
 	await store.setCursor(cursor);

@@ -11,17 +11,13 @@ describe('Memory builder — observational memory', () => {
 		expect(config.observationalMemory).toBeUndefined();
 	});
 
-	it('applies summaryKind and lockTtlMs defaults', () => {
+	it('applies lockTtlMs default', () => {
 		const config = new Memory().observationalMemory({ observe }).build();
-		expect(config.observationalMemory?.summaryKind).toBe('summary');
 		expect(config.observationalMemory?.lockTtlMs).toBe(30_000);
 	});
 
-	it('respects consumer overrides for summaryKind and lockTtlMs', () => {
-		const config = new Memory()
-			.observationalMemory({ observe, summaryKind: 'rolling', lockTtlMs: 5_000 })
-			.build();
-		expect(config.observationalMemory?.summaryKind).toBe('rolling');
+	it('respects consumer overrides for lockTtlMs', () => {
+		const config = new Memory().observationalMemory({ observe, lockTtlMs: 5_000 }).build();
 		expect(config.observationalMemory?.lockTtlMs).toBe(5_000);
 	});
 

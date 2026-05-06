@@ -27,15 +27,15 @@ describe('loadObservationalMemoryContext', () => {
 		expect(ctx).toBeNull();
 	});
 
-	it('renders a summary alone', async () => {
+	it('renders the rolling summary alone when no observations are queued', async () => {
 		const store = new InMemoryMemory();
-		await store.appendObservations([obs({ kind: 'summary', payload: 'rolling state' })]);
+		await store.setRollingSummary('thread', 't-1', 'rolling state', new Date());
 
 		const ctx = await loadObservationalMemoryContext(store, {}, 'thread', 't-1');
 		expect(ctx?.renderedSection).toContain('rolling state');
 	});
 
-	it('renders recent observations alone (no summary)', async () => {
+	it('renders recent observations alone when no summary exists', async () => {
 		const store = new InMemoryMemory();
 		await store.appendObservations([obs({ payload: 'first' }), obs({ payload: 'second' })]);
 
@@ -43,11 +43,10 @@ describe('loadObservationalMemoryContext', () => {
 		expect(ctx?.renderedSection).toBe('- first\n- second');
 	});
 
-	it('only includes observations after the latest summary', async () => {
+	it('renders the rolling summary plus uncompacted observations together', async () => {
 		const store = new InMemoryMemory();
+		await store.setRollingSummary('thread', 't-1', 'rolling state v1', new Date());
 		await store.appendObservations([
-			obs({ payload: 'pre-summary noise' }),
-			obs({ kind: 'summary', payload: 'rolling state v1' }),
 			obs({ payload: 'post-summary one' }),
 			obs({ payload: 'post-summary two' }),
 		]);
@@ -56,10 +55,9 @@ describe('loadObservationalMemoryContext', () => {
 		expect(ctx?.renderedSection).toContain('rolling state v1');
 		expect(ctx?.renderedSection).toContain('post-summary one');
 		expect(ctx?.renderedSection).toContain('post-summary two');
-		expect(ctx?.renderedSection).not.toContain('pre-summary noise');
 	});
 
-	it('skips compacted rows when looking for recent observations', async () => {
+	it('skips compacted observations', async () => {
 		const store = new InMemoryMemory();
 		const persisted = await store.appendObservations([
 			obs({ payload: 'will be compacted' }),
@@ -72,36 +70,9 @@ describe('loadObservationalMemoryContext', () => {
 		expect(ctx?.renderedSection).not.toContain('will be compacted');
 	});
 
-	it('uses a custom summaryKind when configured', async () => {
-		const store = new InMemoryMemory();
-		await store.appendObservations([
-			obs({ kind: 'summary', payload: 'as-summary' }),
-			obs({ kind: 'rolling', payload: 'as-rolling' }),
-		]);
-
-		// Default 'summary' would pick the kind='summary' row; with 'rolling'
-		// the kind='rolling' row is selected as the summary instead.
-		const defaultCtx = await loadObservationalMemoryContext(store, {}, 'thread', 't-1');
-		expect(defaultCtx?.renderedSection?.split('\n')[0]).toBe('as-summary');
-
-		const customCtx = await loadObservationalMemoryContext(
-			store,
-			{ summaryKind: 'rolling' },
-			'thread',
-			't-1',
-		);
-		expect(customCtx?.renderedSection?.split('\n')[0]).toBe('as-rolling');
-	});
-
 	it('flags isStale to the formatter when the summary is older than the threshold', async () => {
 		const store = new InMemoryMemory();
-		await store.appendObservations([
-			obs({
-				kind: 'summary',
-				payload: 'old summary',
-				createdAt: new Date('2026-05-01T00:00:00Z'),
-			}),
-		]);
+		await store.setRollingSummary('thread', 't-1', 'old summary', new Date('2026-05-01T00:00:00Z'));
 
 		const formatter: FormatContextFn = jest.fn(
 			(_ctx: Parameters<FormatContextFn>[0]) => 'rendered',
@@ -121,13 +92,7 @@ describe('loadObservationalMemoryContext', () => {
 
 	it('does not flag isStale when threshold is absent', async () => {
 		const store = new InMemoryMemory();
-		await store.appendObservations([
-			obs({
-				kind: 'summary',
-				payload: 'old',
-				createdAt: new Date('2020-01-01T00:00:00Z'),
-			}),
-		]);
+		await store.setRollingSummary('thread', 't-1', 'old', new Date('2020-01-01T00:00:00Z'));
 
 		const formatter: FormatContextFn = jest.fn(
 			(_ctx: Parameters<FormatContextFn>[0]) => 'rendered',
@@ -139,13 +104,7 @@ describe('loadObservationalMemoryContext', () => {
 
 	it('default formatter prepends [stale] when flagged', async () => {
 		const store = new InMemoryMemory();
-		await store.appendObservations([
-			obs({
-				kind: 'summary',
-				payload: 'old summary',
-				createdAt: new Date('2026-05-01T00:00:00Z'),
-			}),
-		]);
+		await store.setRollingSummary('thread', 't-1', 'old summary', new Date('2026-05-01T00:00:00Z'));
 
 		const ctx = await loadObservationalMemoryContext(
 			store,
@@ -157,7 +116,7 @@ describe('loadObservationalMemoryContext', () => {
 		expect(ctx?.renderedSection?.startsWith('[stale]')).toBe(true);
 	});
 
-	it('skips rows whose schemaVersion exceeds the SDK supported version', async () => {
+	it('skips observation rows whose schemaVersion exceeds the SDK supported version', async () => {
 		const store = new InMemoryMemory();
 		await store.appendObservations([
 			obs({ payload: 'future row', schemaVersion: 99 }),
@@ -171,10 +130,8 @@ describe('loadObservationalMemoryContext', () => {
 
 	it('uses the consumer formatter when provided and returns its string', async () => {
 		const store = new InMemoryMemory();
-		await store.appendObservations([
-			obs({ kind: 'summary', payload: 'sum' }),
-			obs({ payload: 'recent' }),
-		]);
+		await store.setRollingSummary('thread', 't-1', 'sum', new Date());
+		await store.appendObservations([obs({ payload: 'recent' })]);
 
 		const formatter: FormatContextFn = jest.fn((_ctx: Parameters<FormatContextFn>[0]) => 'CUSTOM');
 		const ctx = await loadObservationalMemoryContext(

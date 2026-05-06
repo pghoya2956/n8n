@@ -1909,7 +1909,6 @@ export class AgentRuntime {
 			...(obsConfig.compactionRowThreshold !== undefined && {
 				compactionRowThreshold: obsConfig.compactionRowThreshold,
 			}),
-			...(obsConfig.summaryKind !== undefined && { summaryKind: obsConfig.summaryKind }),
 			...(obsConfig.lockTtlMs !== undefined && { lockTtlMs: obsConfig.lockTtlMs }),
 			...(this.config.telemetry !== undefined && { telemetry: this.config.telemetry }),
 			eventBus: this.eventBus,

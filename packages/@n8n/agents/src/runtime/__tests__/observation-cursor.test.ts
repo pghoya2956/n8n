@@ -2,11 +2,7 @@ import type { AgentDbMessage, AgentMessage, Message } from '../../types/sdk/mess
 import { InMemoryMemory } from '../memory-store';
 import { advanceCursor, getDeltaSinceCursor } from '../observation-cursor';
 
-function makeMsg(
-	role: 'user' | 'assistant',
-	text: string,
-	createdAt = new Date(),
-): AgentDbMessage {
+function makeMsg(role: 'user' | 'assistant', text: string, createdAt = new Date()): AgentDbMessage {
 	return {
 		id: crypto.randomUUID(),
 		createdAt,
@@ -28,10 +24,7 @@ describe('getDeltaSinceCursor', () => {
 		await store.saveMessages({
 			threadId: 't-1',
 			resourceId: 'u-1',
-			messages: [
-				makeMsg('user', 'one', new Date(t)),
-				makeMsg('assistant', 'two', new Date(t + 1)),
-			],
+			messages: [makeMsg('user', 'one', new Date(t)), makeMsg('assistant', 'two', new Date(t + 1))],
 		});
 
 		const { messages, cursor } = await getDeltaSinceCursor(store, 'thread', 't-1');
@@ -46,15 +39,14 @@ describe('getDeltaSinceCursor', () => {
 		await store.saveMessages({
 			threadId: 't-1',
 			resourceId: 'u-1',
-			messages: [
-				makeMsg('user', 'one', new Date(t)),
-				makeMsg('assistant', 'two', new Date(t + 1)),
-			],
+			messages: [makeMsg('user', 'one', new Date(t)), makeMsg('assistant', 'two', new Date(t + 1))],
 		});
 		const [first] = await store.getMessages('t-1');
 		await store.setCursor({
 			scopeKind: 'thread',
 			scopeId: 't-1',
+			summary: null,
+			summaryUpdatedAt: null,
 			lastObservedMessageId: first.id,
 			lastObservedAt: first.createdAt,
 			updatedAt: new Date(),
@@ -82,6 +74,8 @@ describe('getDeltaSinceCursor', () => {
 		await store.setCursor({
 			scopeKind: 'thread',
 			scopeId: 't-1',
+			summary: null,
+			summaryUpdatedAt: null,
 			lastObservedMessageId: only.id,
 			lastObservedAt: only.createdAt,
 			updatedAt: new Date(),
@@ -110,6 +104,8 @@ describe('getDeltaSinceCursor', () => {
 		await store.setCursor({
 			scopeKind: 'thread',
 			scopeId: 't-A',
+			summary: null,
+			summaryUpdatedAt: null,
 			lastObservedMessageId: aMessages[0].id,
 			lastObservedAt: aMessages[0].createdAt,
 			updatedAt: new Date(),
@@ -167,10 +163,7 @@ describe('advanceCursor', () => {
 		await store.saveMessages({
 			threadId: 't-1',
 			resourceId: 'u-1',
-			messages: [
-				makeMsg('user', 'one', new Date(t)),
-				makeMsg('user', 'two', new Date(t + 1)),
-			],
+			messages: [makeMsg('user', 'one', new Date(t)), makeMsg('user', 'two', new Date(t + 1))],
 		});
 		const [first, second] = await store.getMessages('t-1');
 

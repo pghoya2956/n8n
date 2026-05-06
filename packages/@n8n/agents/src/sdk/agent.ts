@@ -581,7 +581,6 @@ export class Agent implements BuiltAgent, AgentBuilder {
 			...(obsConfig.compactionRowThreshold !== undefined && {
 				compactionRowThreshold: obsConfig.compactionRowThreshold,
 			}),
-			...(obsConfig.summaryKind !== undefined && { summaryKind: obsConfig.summaryKind }),
 			...(obsConfig.lockTtlMs !== undefined && { lockTtlMs: obsConfig.lockTtlMs }),
 			...(telemetry !== undefined && { telemetry }),
 			eventBus: this.eventBus,

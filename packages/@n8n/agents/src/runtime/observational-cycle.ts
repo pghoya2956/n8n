@@ -12,7 +12,6 @@ import type {
 } from '../types/sdk/observation';
 import type { BuiltTelemetry } from '../types/telemetry';
 
-const DEFAULT_SUMMARY_KIND = 'summary';
 const DEFAULT_LOCK_TTL_MS = 30_000;
 
 export interface RunObservationalCycleOpts {
@@ -22,7 +21,6 @@ export interface RunObservationalCycleOpts {
 	observe: ObserveFn;
 	compact?: CompactFn;
 	compactionRowThreshold?: number;
-	summaryKind?: string;
 	lockTtlMs?: number;
 	telemetry?: BuiltTelemetry;
 	eventBus?: AgentEventBus;
@@ -53,7 +51,6 @@ export type RunObservationalCycleResult =
 export async function runObservationalCycle(
 	opts: RunObservationalCycleOpts,
 ): Promise<RunObservationalCycleResult> {
-	const summaryKind = opts.summaryKind ?? DEFAULT_SUMMARY_KIND;
 	const ttlMs = opts.lockTtlMs ?? DEFAULT_LOCK_TTL_MS;
 
 	const lockResult = await withObservationLock(
@@ -61,7 +58,7 @@ export async function runObservationalCycle(
 		opts.scopeKind,
 		opts.scopeId,
 		{ ttlMs },
-		async () => await runInsideLock(opts, summaryKind),
+		async () => await runInsideLock(opts),
 	);
 
 	if (lockResult.status === 'skipped') return { status: 'skipped', reason: 'lock-held' };
@@ -70,20 +67,15 @@ export async function runObservationalCycle(
 
 async function runInsideLock(
 	opts: RunObservationalCycleOpts,
-	summaryKind: string,
 ): Promise<RunObservationalCycleResult> {
 	const { memory, scopeKind, scopeId, observe, compact, eventBus, telemetry } = opts;
 
 	const { messages: deltaMessages, cursor } = await getDeltaSinceCursor(memory, scopeKind, scopeId);
 	if (deltaMessages.length === 0) return { status: 'skipped', reason: 'no-delta' };
 
-	const summaryRows = await memory.getObservations({
-		scopeKind,
-		scopeId,
-		kindIs: summaryKind,
-		limit: 1,
-	});
-	const previousSummary = summaryRows.length > 0 ? renderPayload(summaryRows[0].payload) : null;
+	// The rolling summary lives on the cursor — one row per scope, single
+	// source of truth, no ordering needed.
+	const previousSummary = cursor?.summary ?? null;
 
 	let observerRows: NewObservation[];
 	try {
@@ -108,7 +100,7 @@ async function runInsideLock(
 	let compacted = false;
 	if (compact && opts.compactionRowThreshold !== undefined) {
 		try {
-			compacted = await maybeCompact(opts, summaryKind, previousSummary);
+			compacted = await maybeCompact(opts, previousSummary);
 		} catch (error) {
 			emitError(eventBus, 'compactor', error);
 		}
@@ -119,20 +111,16 @@ async function runInsideLock(
 
 async function maybeCompact(
 	opts: RunObservationalCycleOpts,
-	summaryKind: string,
 	previousSummary: string | null,
 ): Promise<boolean> {
 	const { memory, scopeKind, scopeId, compact, telemetry } = opts;
 	if (!compact || opts.compactionRowThreshold === undefined) return false;
 
-	const uncompacted = await memory.getObservations({
+	const inputs = await memory.getObservations({
 		scopeKind,
 		scopeId,
 		onlyUncompacted: true,
 	});
-	// Don't feed prior summary rows back into the compactor's input — those
-	// are output of an earlier cycle, not raw observations.
-	const inputs = uncompacted.filter((row) => row.kind !== summaryKind);
 	if (inputs.length < opts.compactionRowThreshold) return false;
 
 	const result = await compact({
@@ -140,10 +128,15 @@ async function maybeCompact(
 		previousSummary,
 		telemetry,
 	});
-	await memory.appendObservations([result.summary]);
+	const now = new Date();
+	const summaryText =
+		typeof result.summary.payload === 'string'
+			? result.summary.payload
+			: renderPayload(result.summary.payload);
+	await memory.setRollingSummary(scopeKind, scopeId, summaryText, now);
 	await memory.markObservationsCompacted(
 		inputs.map((r) => r.id),
-		new Date(),
+		now,
 	);
 	return true;
 }

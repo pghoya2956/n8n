@@ -11,7 +11,6 @@ import type {
 	TitleGenerationConfig,
 } from '../types';
 
-const DEFAULT_OBSERVATION_SUMMARY_KIND = 'summary';
 const DEFAULT_OBSERVATION_LOCK_TTL_MS = 30_000;
 
 function hasObservationStore(memory: BuiltMemory): memory is BuiltMemory & BuiltObservationStore {
@@ -244,8 +243,6 @@ export class Memory {
 			.observationalMemoryConfig
 			? {
 					...this.observationalMemoryConfig,
-					summaryKind:
-						this.observationalMemoryConfig.summaryKind ?? DEFAULT_OBSERVATION_SUMMARY_KIND,
 					lockTtlMs: this.observationalMemoryConfig.lockTtlMs ?? DEFAULT_OBSERVATION_LOCK_TTL_MS,
 				}
 			: undefined;

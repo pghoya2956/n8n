@@ -11,9 +11,9 @@ import type {
 /**
  * Load and render the observational-memory section for a scope.
  *
- * Queries the latest row of `kind === config.summaryKind` plus any
- * uncompacted rows after it (filtered to schema versions the SDK can
- * interpret), computes staleness against `stalenessThresholdMs` if set,
+ * Reads the rolling summary directly from the cursor row (one summary per
+ * scope, no ordering needed) and the uncompacted observations newer than
+ * the summary. Computes staleness against `stalenessThresholdMs` if set,
  * and either calls the consumer's `formatContext` or falls back to the
  * SDK's minimal default formatter.
  *
@@ -28,31 +28,19 @@ export async function loadObservationalMemoryContext(
 	scopeId: string,
 	now: Date = new Date(),
 ): Promise<ObservationalMemoryContext | null> {
-	const summaryKind = config.summaryKind ?? 'summary';
-
-	const summaryRows = await store.getObservations({
-		scopeKind,
-		scopeId,
-		kindIs: summaryKind,
-		schemaVersionAtMost: OBSERVATION_SCHEMA_VERSION,
-		limit: 1,
-	});
-	const latestSummary = summaryRows.length > 0 ? summaryRows[summaryRows.length - 1] : null;
+	const cursor = await store.getCursor(scopeKind, scopeId);
+	const summaryText = cursor?.summary ?? null;
+	const summaryUpdatedAt = cursor?.summaryUpdatedAt ?? null;
 
 	const recentObservations = await store.getObservations({
 		scopeKind,
 		scopeId,
-		since: latestSummary
-			? { sinceCreatedAt: latestSummary.createdAt, sinceObservationId: latestSummary.id }
-			: undefined,
 		schemaVersionAtMost: OBSERVATION_SCHEMA_VERSION,
 		onlyUncompacted: true,
 	});
 
-	if (!latestSummary && recentObservations.length === 0) return null;
+	if (summaryText === null && recentObservations.length === 0) return null;
 
-	const summaryText = latestSummary ? renderPayload(latestSummary.payload) : null;
-	const summaryUpdatedAt = latestSummary?.createdAt ?? null;
 	const isStale =
 		config.stalenessThresholdMs !== undefined &&
 		summaryUpdatedAt !== null &&
