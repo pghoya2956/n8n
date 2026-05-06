@@ -15,6 +15,13 @@ import AgentMiniEditor from '../components/AgentMiniEditor.vue';
  */
 const REFRESH_INTERVAL_MS = 5000;
 
+// Mirror of cli/from-json-config defaults — kept here only for the debug
+// countdown below. If those defaults change, this display drifts.
+const COMPACTION_IDLE_WINDOW_MS = 5 * 60 * 1000;
+const COMPACTION_MIN_OBSERVATIONS = 3;
+const COMPACTION_BURST_THRESHOLD = 10;
+const COUNTDOWN_TICK_MS = 1000;
+
 const props = withDefaults(
 	defineProps<{
 		config: AgentJsonConfig | null;
@@ -34,6 +41,7 @@ const rootStore = useRootStore();
 
 const memoryData = ref<AgentMemoryReadResponse | null>(null);
 const loading = ref(false);
+const now = ref(Date.now());
 
 const observationalEnabled = computed(
 	() => props.config?.memory?.observationalMemory?.enabled === true,
@@ -55,6 +63,7 @@ async function loadMemory() {
 }
 
 let refreshHandle: ReturnType<typeof setInterval> | null = null;
+let tickHandle: ReturnType<typeof setInterval> | null = null;
 
 function startAutoRefresh() {
 	stopAutoRefresh();
@@ -63,12 +72,19 @@ function startAutoRefresh() {
 		if (!observationalEnabled.value) return;
 		void loadMemory();
 	}, REFRESH_INTERVAL_MS);
+	tickHandle = setInterval(() => {
+		now.value = Date.now();
+	}, COUNTDOWN_TICK_MS);
 }
 
 function stopAutoRefresh() {
 	if (refreshHandle !== null) {
 		clearInterval(refreshHandle);
 		refreshHandle = null;
+	}
+	if (tickHandle !== null) {
+		clearInterval(tickHandle);
+		tickHandle = null;
 	}
 }
 
@@ -88,6 +104,34 @@ function onToggle(enabled: boolean) {
 const formattedUpdatedAt = computed(() => {
 	if (!memoryData.value?.summaryUpdatedAt) return '';
 	return new Date(memoryData.value.summaryUpdatedAt).toLocaleString();
+});
+
+const debugCountdown = computed(() => {
+	if (!observationalEnabled.value) return '';
+	const queued = memoryData.value?.observationCount ?? 0;
+	const updatedAtMs = memoryData.value?.summaryUpdatedAt
+		? new Date(memoryData.value.summaryUpdatedAt).getTime()
+		: null;
+	const queuedSuffix = `${queued} queued (≥${COMPACTION_MIN_OBSERVATIONS} floor, ≥${COMPACTION_BURST_THRESHOLD} burst)`;
+
+	if (queued < COMPACTION_MIN_OBSERVATIONS) {
+		return `[debug] below floor — ${queuedSuffix}`;
+	}
+	if (queued >= COMPACTION_BURST_THRESHOLD) {
+		return `[debug] burst override — fires next turn — ${queuedSuffix}`;
+	}
+	if (updatedAtMs === null) {
+		return `[debug] no prior compaction — fires next turn — ${queuedSuffix}`;
+	}
+	const nextAt = updatedAtMs + COMPACTION_IDLE_WINDOW_MS;
+	const remainingMs = nextAt - now.value;
+	if (remainingMs <= 0) {
+		return `[debug] idle window elapsed — fires next turn — ${queuedSuffix}`;
+	}
+	const totalSec = Math.ceil(remainingMs / 1000);
+	const m = Math.floor(totalSec / 60);
+	const s = totalSec % 60;
+	return `[debug] idle window: ${m}m ${String(s).padStart(2, '0')}s left — ${queuedSuffix}`;
 });
 
 const emptyStateText = computed(() => {
@@ -184,6 +228,12 @@ onBeforeUnmount(() => {
 			<div v-else-if="!loading" :class="$style.emptyState" data-testid="agent-memory-empty">
 				<N8nText size="small" color="text-light">{{ emptyStateText }}</N8nText>
 			</div>
+
+			<div :class="$style.debugCountdown" data-testid="agent-memory-debug-countdown">
+				<N8nText size="xsmall" color="text-light" :class="$style.debugMono">{{
+					debugCountdown
+				}}</N8nText>
+			</div>
 		</template>
 	</div>
 </template>
@@ -238,5 +288,14 @@ onBeforeUnmount(() => {
 	text-align: center;
 	border: 1px dashed var(--color--background--light-3);
 	border-radius: var(--radius);
+}
+
+.debugCountdown {
+	padding: var(--spacing--3xs) var(--spacing--3xs);
+	border-top: 1px dashed var(--color--background--light-3);
+}
+
+.debugMono {
+	font-family: var(--font-family--monospace);
 }
 </style>

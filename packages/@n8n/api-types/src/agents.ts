@@ -170,7 +170,6 @@ export interface AgentJsonConfig {
 		};
 		observationalMemory?: {
 			enabled: boolean;
-			compactionRowThreshold?: number;
 			stalenessThresholdMs?: number;
 		};
 	};

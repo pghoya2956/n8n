@@ -16,7 +16,6 @@ const SemanticRecallSchema = z.object({
 
 const ObservationalMemoryConfigSchema = z.object({
 	enabled: z.boolean(),
-	compactionRowThreshold: z.number().int().min(1).max(100).optional(),
 	stalenessThresholdMs: z.number().int().min(0).optional(),
 });
 

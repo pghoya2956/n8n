@@ -294,8 +294,10 @@ async function resolveToolRef(
 	}
 }
 
-const DEFAULT_OBSERVATIONAL_COMPACTION_ROW_THRESHOLD = 10;
 const DEFAULT_OBSERVATIONAL_STALENESS_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_OBSERVATIONAL_COMPACTION_MIN_OBSERVATIONS = 3;
+const DEFAULT_OBSERVATIONAL_COMPACTION_IDLE_MS = 5 * 60 * 1000;
+const DEFAULT_OBSERVATIONAL_COMPACTION_BURST_THRESHOLD = 10;
 
 async function applyMemoryFromConfig(
 	agent: AgentBuilder,
@@ -335,9 +337,9 @@ async function applyMemoryFromConfig(
 			compact,
 			formatContext,
 			getScope: buildAgentResourceScopeResolver(agentId),
-			compactionRowThreshold:
-				memoryConfig.observationalMemory.compactionRowThreshold ??
-				DEFAULT_OBSERVATIONAL_COMPACTION_ROW_THRESHOLD,
+			compactionMinObservations: DEFAULT_OBSERVATIONAL_COMPACTION_MIN_OBSERVATIONS,
+			compactionIdleMs: DEFAULT_OBSERVATIONAL_COMPACTION_IDLE_MS,
+			compactionBurstThreshold: DEFAULT_OBSERVATIONAL_COMPACTION_BURST_THRESHOLD,
 			stalenessThresholdMs:
 				memoryConfig.observationalMemory.stalenessThresholdMs ?? DEFAULT_OBSERVATIONAL_STALENESS_MS,
 		});

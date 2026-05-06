@@ -71,32 +71,36 @@ Emit nothing — output an empty response — if no behavioural pattern is
 present in this delta. Most turns produce zero observations. That is the
 expected case.`;
 
-const COMPACTOR_PROMPT = `You produce a rolling summary of BEHAVIOURAL PATTERNS that have emerged
-across this conversation — not the state of the conversation. State, facts,
-decisions, and open follow-ups live in a separate "working memory" and must
-NOT appear in your output.
+const COMPACTOR_PROMPT = `You're keeping a short, human-friendly note about how this person likes
+to work — not what they're working on. Their goals, decisions, plans, and
+to-dos are tracked separately in working memory; don't repeat any of that
+here.
 
-Read the previous rolling summary and the new observations, then output a
-new summary covering ONLY:
-  - Persistent engagement patterns (how the user works, not what they want).
-  - Recurring frictions or preferences about interaction style.
-  - Behavioural arcs that span multiple turns.
+What goes in your note:
+  - The way they like to be talked to (terse vs chatty, formal vs casual).
+  - Patterns in how they think, ask questions, or push back.
+  - Frictions you've noticed across multiple turns.
 
-Drop:
-  - Anything that looks like a fact, decision, goal, or current state.
+Skip:
+  - Anything that sounds like a fact, decision, goal, or current task.
+  - Things you'd guess from one or two messages — only patterns that have
+    shown up several times count.
   - Restatements of context already obvious from the conversation.
-  - Patterns that occurred only once and aren't recurring.
 
-Output a markdown bulleted list. Each bullet on its own line, starting
-with "- " (hyphen, space). No fences, no headers, no preamble — only the
-list. Three to six bullets is normal. If nothing durable has emerged yet,
-return an empty string.
+Format: a short markdown bulleted list. Each bullet on its own line,
+starting with "- " (hyphen, space). Three to six bullets is normal. No
+fences, no headers, no preamble — only the list. If nothing notable has
+emerged yet, return an empty string.
+
+Keep the tone friendly and human, like notes you'd jot to remember a
+collaborator's quirks. Not a clinical case study.
 
 Example output:
 
-- prefers terse direct answers over exploratory back-and-forth
-- consistently switches context after long pauses
-- gets frustrated when output includes process commentary`;
+- prefers terse, direct answers over a lot of back-and-forth
+- often switches context after long pauses and picks up where they left off
+- gets impatient when responses include a lot of explanation about what's
+  happening behind the scenes`;
 
 const SUMMARY_KIND = 'summary';
 

@@ -536,8 +536,7 @@ export function getConfigRulesSection(builderModel: string): string {
 - Use "n8n" as the default memory storage for all agents
 - \`memory.observationalMemory\` is opt-in. It runs a background observer + compactor that records BEHAVIOURAL PATTERNS — how the user engages, recurring frictions, interaction-style preferences — and surfaces a rolling summary in the system prompt. It is complementary to working memory, never a replacement: working memory owns durable facts, decisions, and current state.
   - Enable it with \`{ enabled: true }\` when the user asks for things like: "the agent should pick up on patterns over time", "remember how I like to be talked to", "notice when something keeps going wrong", "learn from the conversation", "adapt to my preferences". For one-shot or single-turn agents, leave it off.
-  - Optional knob: \`compactionRowThreshold\` (default 10) — how many observations accumulate before they get rolled into the summary. Only set if the user asks for specific tuning.
-  - Cost: each chat turn runs one extra LLM call (the observer) on the agent's main model; compaction runs roughly every \`compactionRowThreshold\` turns. Mention this if the user asks about cost.
+  - Cost: each chat turn runs one extra LLM call (the observer) on the agent's main model; compaction runs at most once per few minutes when enough observations have queued up. Mention this if the user asks about cost.
 - If the agent has no \`model\`/\`credential\` yet, call resolve_llm or ask_llm before defaulting; only fall back to '${builderModel}' as the in-config placeholder string when the user explicitly declines to pick.`;
 }
 

@@ -107,30 +107,18 @@ describe('AgentJsonConfigSchema — memory.observationalMemory', () => {
 		expect(parsed.success).toBe(true);
 	});
 
-	it('accepts observationalMemory with thresholds set', () => {
+	it('accepts observationalMemory with stalenessThresholdMs set', () => {
 		const parsed = AgentJsonConfigSchema.safeParse({
 			...baseConfig,
 			memory: {
 				...memoryBase,
 				observationalMemory: {
 					enabled: true,
-					compactionRowThreshold: 5,
 					stalenessThresholdMs: 60_000,
 				},
 			},
 		});
 		expect(parsed.success).toBe(true);
-	});
-
-	it('rejects negative compactionRowThreshold', () => {
-		const parsed = AgentJsonConfigSchema.safeParse({
-			...baseConfig,
-			memory: {
-				...memoryBase,
-				observationalMemory: { enabled: true, compactionRowThreshold: -1 },
-			},
-		});
-		expect(parsed.success).toBe(false);
 	});
 
 	it('rejects negative stalenessThresholdMs', () => {
@@ -149,7 +137,7 @@ describe('AgentJsonConfigSchema — memory.observationalMemory', () => {
 			...baseConfig,
 			memory: {
 				...memoryBase,
-				observationalMemory: { compactionRowThreshold: 5 },
+				observationalMemory: { stalenessThresholdMs: 60_000 },
 			},
 		});
 		expect(parsed.success).toBe(false);
