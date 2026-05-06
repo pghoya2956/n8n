@@ -41,6 +41,13 @@ export interface ObservationCursor {
 	scopeId: string;
 	lastObservedMessageId: string;
 	lastObservedSeq: number;
+	/**
+	 * Wall-clock `createdAt` of the last observed message. Used as the
+	 * cursor-advance field for cross-thread scopes (`'resource'` / `'agent'`)
+	 * where the per-thread `seq` doesn't linearise the delta. Nullable for
+	 * cursors written before this column existed; populated for all new writes.
+	 */
+	lastObservedAt: Date | null;
 	updatedAt: Date;
 }
 
@@ -118,6 +125,22 @@ export interface BuiltObservationStore {
 		schemaVersionAtMost?: number;
 		onlyUncompacted?: boolean;
 	}): Promise<Observation[]>;
+	/**
+	 * Read the message delta the observer needs to process for a given scope.
+	 *
+	 * - `'thread'`: messages for `scopeId` (== threadId) with `seq > sinceSeq`.
+	 * - `'resource'` / `'agent'`: messages across the threads belonging to the
+	 *   scope, ordered by `createdAt` and filtered by `createdAt > sinceCreatedAt`.
+	 *   The consumer interprets `scopeId` (e.g. cli encodes `${agentId}:${resourceId}`).
+	 *
+	 * Returned messages are ordered ascending — the last element is the most
+	 * recently appended.
+	 */
+	getMessagesForScope(
+		scopeKind: ScopeKind,
+		scopeId: string,
+		opts?: { sinceSeq?: number; sinceCreatedAt?: Date },
+	): Promise<AgentDbMessage[]>;
 	/** Soft-flag the given rows as compacted; idempotent. */
 	markObservationsCompacted(ids: string[], compactedAt: Date): Promise<void>;
 	/** Read the cursor for a scope; `null` if none has been written yet. */
@@ -139,12 +162,32 @@ export interface BuiltObservationStore {
 	releaseObservationLock(handle: ObservationLockHandle): Promise<void>;
 }
 
+/**
+ * Resolves the observational scope for a given persistence context. Called by
+ * the runtime on the read path (system-prompt assembly), the write path
+ * (`reflect` / `reflectInBackground`), and the lazy catch-up fallback.
+ *
+ * Consumers use this to opt their agents into `'resource'` or `'agent'` scope
+ * without the SDK learning about agent IDs or user IDs. When omitted, the SDK
+ * defaults to thread scope: `{ scopeKind: 'thread', scopeId: threadId }`.
+ */
+export type ResolveObservationalScope = (persistence: {
+	threadId: string;
+	resourceId?: string;
+}) => { scopeKind: ScopeKind; scopeId: string };
+
 /** Observational-memory configuration block on `MemoryConfig`. */
 export interface ObservationalMemoryConfig {
 	/** Builder-time default observer; `agent.reflect(observe?, ...)` can override per call. */
 	observe?: ObserveFn;
 	/** Builder-time default compactor. Without it, no auto-compaction runs. */
 	compact?: CompactFn;
+	/**
+	 * Optional scope resolver. Defaults to thread scope (`scopeId === threadId`).
+	 * Consumers needing resource- or agent-scoped observations supply this and
+	 * encode whatever they like into `scopeId` (e.g. `${agentId}:${resourceId}`).
+	 */
+	getScope?: ResolveObservationalScope;
 	/**
 	 * When set together with `compact`, the orchestrator runs the compactor
 	 * after `observe` whenever the uncompacted row count for the scope is

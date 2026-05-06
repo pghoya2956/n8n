@@ -49,6 +49,7 @@ export type {
 	ObservationLockHandle,
 	ObservationalMemoryConfig,
 	ObserveFn,
+	ResolveObservationalScope,
 	ScopeKind,
 } from './types';
 export type { ProviderOptions } from '@ai-sdk/provider-utils';

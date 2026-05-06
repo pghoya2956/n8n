@@ -77,6 +77,7 @@ export type {
 	ObservationLockHandle,
 	ObservationalMemoryConfig,
 	ObserveFn,
+	ResolveObservationalScope,
 	ScopeKind,
 } from './sdk/observation';
 export { OBSERVATION_SCHEMA_VERSION } from './sdk/observation';
